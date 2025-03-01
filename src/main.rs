@@ -1,4 +1,4 @@
-#![crate_name = "controll_machine"]
+#![crate_name = "opencontroller"]
 
 pub mod config;
 pub mod ui;

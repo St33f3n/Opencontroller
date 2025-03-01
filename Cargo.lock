@@ -633,27 +633,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "controll-machine"
-version = "0.1.0"
-dependencies = [
- "color-eyre",
- "crsf",
- "gilrs",
- "iced",
- "iced_aw",
- "rppal",
- "rumqttc",
- "serde",
- "statum",
- "thiserror 2.0.11",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2541,6 +2520,27 @@ name = "once_cell"
 version = "1.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "945462a4b81e43c4e3ba96bd7b49d834c6f61198356aa858733bc4acf3cbe62e"
+
+[[package]]
+name = "opencontroller"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "crsf",
+ "gilrs",
+ "iced",
+ "iced_aw",
+ "rppal",
+ "rumqttc",
+ "serde",
+ "statum",
+ "thiserror 2.0.11",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "openssl-probe"
