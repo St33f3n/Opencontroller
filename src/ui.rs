@@ -3,16 +3,11 @@ use std::default;
 use crate::config;
 
 use iced::advanced::graphics::core::font;
-use iced::alignment::Vertical::Top;
-use iced::font::load;
 use iced::widget::{button, combo_box, text, Button, Column};
 use iced::widget::{column, container, row, scrollable, vertical_space, Row};
-use iced::{settings, Element, Fill, Font, Length, Settings, Theme};
-use iced_aw::direction::Vertical;
+use iced::{settings, window, Alignment, Element, Fill, Font, Length, Settings, Size, Theme};
 use iced_aw::{drop_down, DropDown};
 use statum::{machine, state};
-
-
 
 fn update(machine: &mut UIMachine, message: MenuFunctions) {
     let current_situation = (&mut machine.menu, message);
@@ -43,7 +38,12 @@ fn update(machine: &mut UIMachine, message: MenuFunctions) {
             new_data.server_expanded = false;
             machine.menu = MenuState::Mqtt(new_data);
         }
-        (MenuState::Mqtt(data), MenuFunctions::SetActiv) => {
+        (MenuState::Mqtt(data), MenuFunctions::SetServerActiv) => {
+            let mut new_data = data.clone();
+            new_data.server_idx = new_data.selected_server_idx;
+            machine.menu = MenuState::Mqtt(new_data);
+        }
+        (MenuState::Mqtt(data), MenuFunctions::SetSubActiv) => {
             let mut new_data = data.clone();
             new_data.server_idx = new_data.selected_server_idx;
             machine.menu = MenuState::Mqtt(new_data);
@@ -51,9 +51,15 @@ fn update(machine: &mut UIMachine, message: MenuFunctions) {
         (MenuState::Mqtt(data), MenuFunctions::Dismiss) => {
             let mut new_data = data.clone();
             new_data.server_expanded = false;
+            new_data.sub_expanded = false;
             machine.menu = MenuState::Mqtt(new_data);
         }
-        (MenuState::Mqtt(data), MenuFunctions::Expand) => {
+        (MenuState::Mqtt(data), MenuFunctions::ExpandServer) => {
+            let mut new_data = data.clone();
+            new_data.server_expanded = true;
+            machine.menu = MenuState::Mqtt(new_data);
+        }
+        (MenuState::Mqtt(data), MenuFunctions::ExpandSub) => {
             let mut new_data = data.clone();
             new_data.server_expanded = true;
             machine.menu = MenuState::Mqtt(new_data);
@@ -78,9 +84,11 @@ enum MenuFunctions {
     SwitchToMQTT,
     SwitchToSettings,
     SwitchToMain,
-    Expand,
+    ExpandServer,
+    ExpandSub,
     Dismiss,
-    SetActiv,
+    SetServerActiv,
+    SetSubActiv,
     Select(usize),
     Close,
     Save,
@@ -132,8 +140,9 @@ impl Default for MQTTData {
             connection_status: MQTTStatus::default(), // Standard-Verbindungsstatus
             active_element: MQTTElement::ServerOption,
             available_servers: vec![
-                "mqtt.default-server.com".to_string(),
+                "mqtt.organiccircuitlab.com".to_string(),
                 "test.com".to_string(),
+                "192.168.2.150:8123".to_string(),
             ],
             selected_server_idx: None,
             server_expanded: false,
@@ -207,20 +216,23 @@ impl Default for UIMachine {
 }
 
 pub fn run_ui() -> iced::Result {
-    
-    let mut test = Font::DEFAULT;
-    test.family = font::Family::Name("MonaspiceKr Nerd Font Propo");
+    let mut font = Font::DEFAULT;
+    font.family = font::Family::Name("MonaspiceKr Nerd Font Propo");
+
+    let mut settings = window::Settings::default();
+    settings.size = Size::new(800 as f32, 600 as f32);
+    settings.min_size = Some(Size::new(740 as f32, 420 as f32));
 
     iced::application("Tests", update, view)
         .theme(theme_setting)
-        .default_font(test)
+        .default_font(font)
+        .window(settings)
         .run()
 }
 
 fn theme_setting(menu: &UIMachine) -> Theme {
     let mut custom_theme = menu.theme.clone();
     custom_theme
-    
 }
 
 fn main_view(menu: &UIMachine, data: MainData) -> Element<MenuFunctions> {
@@ -228,23 +240,31 @@ fn main_view(menu: &UIMachine, data: MainData) -> Element<MenuFunctions> {
         text("MainMenu").height(20).center(),
         row![
             column![
-                button(text("ELRS".to_string()).center())
-                    .width(150)
-                    .padding(10)
-                    .on_press(MenuFunctions::SwitchToELRS),
+                button(
+                    text("ELRS".to_string())
+                        .align_x(Alignment::Center)
+                        .align_y(Alignment::Center)
+                )
+                .width(Length::FillPortion(50))
+                .height(Length::FillPortion(50))
+                .padding(20)
+                .on_press(MenuFunctions::SwitchToELRS),
                 button(text("MQTT".to_string()).center())
-                    .width(150)
-                    .padding(10)
+                    .width(Length::FillPortion(50))
+                    .height(Length::FillPortion(50))
+                    .padding(20)
                     .on_press(MenuFunctions::SwitchToMQTT)
             ],
             column![
                 button(text("Settings".to_string()).center())
-                    .width(150)
-                    .padding(10)
+                    .width(Length::FillPortion(50))
+                    .height(Length::FillPortion(50))
+                    .padding(20)
                     .on_press(MenuFunctions::SwitchToSettings),
                 button(text("Close".to_string()).center())
-                    .width(150)
-                    .padding(10)
+                    .width(Length::FillPortion(50))
+                    .height(Length::FillPortion(50))
+                    .padding(20)
                     .on_press(MenuFunctions::Close)
             ]
         ]
@@ -272,51 +292,40 @@ fn mqtt_view(menu: &UIMachine, data: MQTTData) -> Element<MenuFunctions> {
     let subs = &data.subscription;
     let connection = &data.connection_status;
     let servers = data.available_servers;
-
+    let activator_options = vec!["Connect 󱘖".to_string(), "Connect ".to_string()];
     let server = match &data.server_idx {
-        Some(idx) => format!("Selected Server: {}", servers[*idx]),
+        Some(idx) => format!("Selected Server:\n{}", servers[*idx]),
         None => String::from("No Server selected"),
     };
 
-    let underlay: Row<'_, MenuFunctions> = Row::new()
-        .spacing(10)
-        .push(text(server.clone()))
-        .push(button(text("▼")).on_press(MenuFunctions::Expand));
-
-    let mut overlay_children: Vec<Element<'_, MenuFunctions>> = Vec::new();
-    for (idx, available_server) in servers.iter().enumerate() {
-        let row = Row::new()
-            .spacing(10)
-            .align_y(Top)
-            .push(text(available_server.clone()))
-            .push(button(text("Select")).on_press(MenuFunctions::Select(idx)));
-
-        overlay_children.push(row.into());
-    }
-
-    let drop_down = DropDown::new(
-        underlay,
-        Column::with_children(overlay_children),
+    let (drop_down, set_active_button) = dropdown_wiget(
+        &server,
+        &servers,
         data.server_expanded,
-    )
-    .width(Length::Fill)
-    .on_dismiss(MenuFunctions::Dismiss)
-    .alignment(drop_down::Alignment::Bottom);
-
-    let set_active_button: Button<'_, MenuFunctions> = if data.selected_server_idx.is_some() {
-        Button::new(text("Set Active")).on_press(MenuFunctions::SetActiv)
-    } else {
-        Button::new(text("Select Server first"))
-    };
+        data.selected_server_idx,
+        &activator_options,
+    );
 
     container(column![
-        row![button("󰌑").on_press(MenuFunctions::SwitchToMain), text("MQTT-Menu")],
-        scrollable(
         row![
-            drop_down,
+            button("󰌑")
+                .on_press(MenuFunctions::SwitchToMain)
+                .width(Length::FillPortion(5)),
+            text("MQTT-Menu").width(Length::FillPortion(95))
+        ],
+        scrollable(row![
+            container(drop_down)
+                .padding(10)
+                .width(Length::FillPortion(65))
+                .align_x(Alignment::End),
             column![set_active_button, text(connection.to_string())]
+                .align_x(Alignment::Start)
+                .width(Length::FillPortion(35))
         ])
+        .width(Length::Fill)
+        .anchor_left()
     ])
+    .width(Length::Fill)
     .into()
 }
 
@@ -338,5 +347,55 @@ impl std::fmt::Display for MQTTStatus {
     }
 }
 
+fn dropdown_wiget<'ui>(
+    selected: &String,
+    available_options: &Vec<String>,
+    expanded: bool,
+    selected_idx: Option<usize>,
+    activator_text: &Vec<String>,
+) -> (DropDown<'ui, MenuFunctions>, Button<'ui, MenuFunctions>) {
+    let underlay: Row<'_, MenuFunctions> = Row::new()
+        .spacing(10)
+        .push(text(selected.clone()))
+        .push(button(text("󰁊")).on_press(MenuFunctions::ExpandServer));
 
+    let mut overlay_children: Vec<Element<'_, MenuFunctions>> = Vec::new();
+    for (idx, available_option) in available_options.iter().enumerate() {
+        let row = Row::new()
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .push(container(text(available_option.clone())))
+            .push(
+                button(text("Select"))
+                    .on_press(MenuFunctions::Select(idx))
+                    .padding(10),
+            );
 
+        overlay_children.push(row.into());
+    }
+
+    let drop_down = DropDown::new(
+        underlay,
+        scrollable(
+            Column::with_children(overlay_children)
+                .max_width(600)
+                .clip(false)
+                .align_x(Alignment::End),
+        )
+        .spacing(5)
+        .height(60)
+        .anchor_right(),
+        expanded,
+    )
+    .width(Length::Fill)
+    .alignment(drop_down::Alignment::Bottom)
+    .on_dismiss(MenuFunctions::Dismiss);
+
+    let set_active_button: Button<'_, MenuFunctions> = if selected_idx.is_some() {
+        Button::new(text(activator_text[0].clone())).on_press(MenuFunctions::SetServerActiv)
+    } else {
+        Button::new(text(activator_text[1].clone()))
+    };
+
+    (drop_down, set_active_button)
+}
