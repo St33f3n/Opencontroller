@@ -3,13 +3,29 @@
 pub mod config;
 pub mod ui;
 
+use crate::ui::ControllerState;
+use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, eyre::Report, Result};
+use eframe::egui;
+use tokio::sync::watch::{self, Receiver};
+use tokio::task;
+use tokio::time::Duration;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-fn main() -> Result<()> {
+#[tokio::main]
+
+async fn main() -> Result<()> {
     setup()?;
-    ui::run_ui()?;
+    let mut native_options = eframe::NativeOptions::default();
+    native_options.viewport = egui::ViewportBuilder::default().with_fullscreen(true);
+    let (tx, rx) = watch::channel(ControllerState::default());
+
+    eframe::run_native(
+        "My egui App",
+        native_options,
+        Box::new(|cc| Ok(Box::new(OpencontrollerUI::new(cc, rx)))),
+    );
 
     Ok(())
 }
@@ -36,33 +52,4 @@ fn setup_logging_env() {
         .with_line_number(true)
         .pretty()
         .init();
-}
-
-use statum::{machine, state};
-
-// 1. Define your states as an enum.
-#[state]
-pub enum LightState {
-    Off,
-    On,
-}
-
-// 2. Define your machine with the #[machine] attribute.
-#[machine]
-pub struct LightSwitch<S: LightState> {
-    name: String, // Contextual, Machine-wide fields go here, like clients, configs, an identifier, etc.
-}
-
-// 3. Implement transitions for each state.
-impl LightSwitch<Off> {
-    pub fn switch_on(self) -> LightSwitch<On> {
-        //Note: we consume self and return a new state
-        self.transition()
-    }
-}
-
-impl LightSwitch<On> {
-    pub fn switch_off(self) -> LightSwitch<Off> {
-        self.transition()
-    }
 }
