@@ -420,7 +420,7 @@ impl MappingConfig for ELRSMappingConfig {
                     
                     if is_pressed {
                         // Komponente mit aktuellem Zustand erstellen
-                        let component = InputComponent::Button(*button_type, ButtonEventState::Held);
+                        let component = InputComponent::Button(button_type.clone(), ButtonEventState::Held);
                         
                         // Strategie anwenden
                         if let Some(event) = strategy.apply(&component) {

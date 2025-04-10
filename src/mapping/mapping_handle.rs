@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::controller::controller::ControllerOutput;
 use crate::mapping::mapping_config::{MappingConfig, KeyboardMappingConfig, ELRSMappingConfig};
 use crate::mapping::mapping_engine::{MappingEngine, run_mapping_engine};
-use crate::mapping::mapping_types::{MappedEvent, MappingError};
+use crate::mapping::mapping_types::{MappedEvent, MappingError, KeyCode, KeyState};
 
 /// Typ-Alias für einen Event-Receiver
 pub type EventReceiver = mpsc::Receiver<MappedEvent>;
@@ -86,7 +86,7 @@ impl MappingEngineHandle {
         });
         
         // Mapping Engine im Initializing-Zustand erstellen
-        let engine = MappingEngine::new(
+        let engine = MappingEngine::create(  // Statt MappingEngine::new
             input_receiver,
             output_sender,
             initial_config,
@@ -113,12 +113,8 @@ impl MappingEngineHandle {
             current_config_name: config_name,
         })
     }
-    
-    /// Gibt einen Empfänger für gemappte Events zurück
-    pub fn get_event_receiver(&self) -> mpsc::Receiver<MappedEvent> {
-        debug!("Creating new event receiver");
-        self.output_receiver.clone()
-    }
+ 
+
     
     /// Gibt den Namen der aktuellen Konfiguration zurück
     pub fn current_config_name(&self) -> &str {
@@ -169,7 +165,7 @@ impl MappingEngineHandle {
 /// Dienstprogramm zur Verarbeitung von Tastaturevents in einem egui-Kontext
 pub struct KeyboardEventProcessor {
     event_receiver: mpsc::Receiver<MappedEvent>,
-    key_states: HashMap<crate::mapping_types::KeyCode, bool>,
+    key_states: HashMap<KeyCode, bool>, // Korrigiert!
 }
 
 impl KeyboardEventProcessor {
@@ -189,8 +185,8 @@ impl KeyboardEventProcessor {
                 MappedEvent::KeyboardEvent { key_code, state } => {
                     // Zustand in der Tabelle aktualisieren
                     let is_pressed = match state {
-                        crate::mapping_types::KeyState::Pressed => true,
-                        crate::mapping_types::KeyState::Released => false,
+                        KeyState::Pressed => true, 
+                        KeyState::Released => false, 
                     };
                     
                     self.key_states.insert(key_code, is_pressed);
@@ -203,12 +199,12 @@ impl KeyboardEventProcessor {
     }
     
     /// Prüft, ob eine bestimmte Taste gedrückt ist
-    pub fn is_key_pressed(&self, key_code: crate::mapping_types::KeyCode) -> bool {
+    pub fn is_key_pressed(&self, key_code: KeyCode) -> bool {
         *self.key_states.get(&key_code).unwrap_or(&false)
     }
     
     /// Gibt alle aktuell gedrückten Tasten zurück
-    pub fn get_pressed_keys(&self) -> Vec<crate::mapping_types::KeyCode> {
+    pub fn get_pressed_keys(&self) -> Vec<KeyCode> {
         self.key_states
             .iter()
             .filter_map(|(key, pressed)| if *pressed { Some(*key) } else { None })

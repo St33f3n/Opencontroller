@@ -6,8 +6,7 @@
 use std::time::Duration;
 use statum::{machine, state};
 use tokio::{
-    sync::{mpsc, watch},
-    select, time::{self, Instant},
+    select, sync::{mpsc::{self, error::TrySendError}, watch}, time::{self, Instant}
 };
 use tracing::{debug, error, info, warn};
 
@@ -112,7 +111,7 @@ impl<S: MappingEngineState> MappingEngine<S> {
 /// Implementierung für Initializing-Zustand
 impl MappingEngine<Initializing> {
     /// Erstellt eine neue Mapping Engine im Initializing-Zustand
-    pub fn new(
+    pub fn create(
         input_receiver: mpsc::Receiver<ControllerOutput>,
         output_sender: mpsc::Sender<MappedEvent>,
         config: Box<dyn MappingConfig>,
@@ -204,14 +203,19 @@ impl MappingEngine<Processing> {
                 match self.output_sender.try_send(event.clone()) {
                     Ok(_) => self.metrics.events_produced += 1,
                     Err(e) => {
-                        if e.is_full() {
-                            warn!("Output channel is full, event dropped");
-                        } else {
-                            error!("Failed to send mapped event: {}", e);
+                        match e {
+                            TrySendError::Full(x) => {
+                                warn!("Output channel is full, event dropped");
+                            },
+                            TrySendError::Closed(x) => {
+                                error!("Failed to send mapped event: {:?}", x);
+                            },  
+                        }
+                            
                         }
                     }
                 }
-            }
+            
         } else {
             self.metrics.filtered_updates += 1;
             debug!("No significant changes, skipping mapping");
@@ -237,7 +241,7 @@ impl MappingEngine<ConfigChanging> {
         // Wir nehmen die neue Konfiguration aus dem State-Data und wenden sie an
         if let Some(new_config) = self.get_state_data() {
             let mut engine = self.transition();
-            engine.config = new_config;
+            engine.config = new_config.clone();
             
             // Vorherigen Output löschen, um bei der nächsten Verarbeitung
             // eine vollständige Neubewertung zu erzwingen
