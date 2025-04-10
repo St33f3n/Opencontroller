@@ -17,6 +17,8 @@ use std::{str::FromStr, time::Duration};
 use tokio::sync::watch::{self, Receiver};
 use tracing::{debug, error, info};
 
+use crate::controller;
+
 enum MenuState {
     Main,
     MQTT,
@@ -29,11 +31,8 @@ struct SessionData {
     last_session_path: String,
     mqtt_data: MQTTMenuData,
     elrs_data: ELRSMenuData,
-    settings_data: SettingsMenuData
+    settings_data: SettingsMenuData,
 }
-
-#[derive(Default)]
-pub struct ControllerState {}
 
 #[derive(Default)]
 struct ELRSConnection {}
@@ -105,10 +104,8 @@ struct MainMenuData {
     previous_sessions: Vec<SessionData>,
 }
 
-impl MainMenuData{
-
-    fn mock_data() -> Self{
-
+impl MainMenuData {
+    fn mock_data() -> Self {
         let old_test_session = SessionData {
             last_session_path: "".to_string(),
             mqtt_data: MQTTMenuData::mock_data(),
@@ -116,9 +113,12 @@ impl MainMenuData{
             settings_data: SettingsMenuData::mock_data(),
         };
 
-        Self { current_session_name: "TestSession".to_string(), new_session_name: String::new(), previous_sessions: vec![old_test_session] }
+        Self {
+            current_session_name: "TestSession".to_string(),
+            new_session_name: String::new(),
+            previous_sessions: vec![old_test_session],
+        }
     }
-
 }
 
 #[derive(Default)]
@@ -239,7 +239,7 @@ impl WiFiNetwork {
 
 pub struct OpencontrollerUI {
     menu_state: MenuState,
-    controler_state: Receiver<ControllerState>,
+    controler_state: Receiver<controller::controller::ControllerOutput>,
     main_menu_data: MainMenuData,
     elrs_menu_data: ELRSMenuData,
     mqtt_menu_data: MQTTMenuData,
@@ -251,7 +251,7 @@ pub struct OpencontrollerUI {
 impl OpencontrollerUI {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        controler_state: Receiver<ControllerState>,
+        controler_state: Receiver<controller::controller::ControllerOutput>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         OpencontrollerUI {
@@ -268,10 +268,58 @@ impl OpencontrollerUI {
 }
 
 impl OpencontrollerUI {
+    // In der OpencontrollerUI-Implementierung
+    fn log_controller_state(&self) {
+        // Aktuelle Controller-State auslesen
+        let controller_state = self.controler_state.borrow();
+
+        // Joystick-Positionen ausgeben
+        //info!("Controller State:");
+        /* info!("  Left Stick: x={:.2}, y={:.2}, min_x={:.2}, max_x={:.2}, min_y={:.2}, max_y={:.2}, delta_x={:.2}, delta_y={:.2}",
+           controller_state.left_stick.x, controller_state.left_stick.y,
+           controller_state.left_stick.x_min, controller_state.left_stick.x_max,
+           controller_state.left_stick.y_min, controller_state.left_stick.y_max,
+           controller_state.left_stick.delta_x, controller_state.left_stick.delta_y);
+
+        info!("  Right Stick: x={:.2}, y={:.2}, min_x={:.2}, max_x={:.2}, min_y={:.2}, max_y={:.2}, delta_x={:.2}, delta_y={:.2}",
+           controller_state.right_stick.x, controller_state.right_stick.y,
+           controller_state.right_stick.x_min, controller_state.right_stick.x_max,
+           controller_state.right_stick.y_min, controller_state.right_stick.y_max,
+           controller_state.right_stick.delta_x, controller_state.right_stick.delta_y);
+
+        // Trigger-Werte ausgeben
+        info!(
+            "  Left Trigger: value={:.2}, min={:.2}, max={:.2}, delta={:.2}",
+            controller_state.left_trigger.value,
+            controller_state.left_trigger.min,
+            controller_state.left_trigger.max,
+            controller_state.left_trigger.delta
+        );
+
+        info!(
+            "  Right Trigger: value={:.2}, min={:.2}, max={:.2}, delta={:.2}",
+            controller_state.right_trigger.value,
+            controller_state.right_trigger.min,
+            controller_state.right_trigger.max,
+            controller_state.right_trigger.delta
+        ); */
+
+        // Button-Events ausgeben
+        if !controller_state.button_events.is_empty() {
+            info!("  Button Events:");
+            for (i, event) in controller_state.button_events.iter().enumerate() {
+                info!(
+                    "    {}: {:?}, duration: {}s",
+                    i, event.button, event.duration_ms
+                );
+            }
+        }
+    }
+
     fn main_menu(&mut self, ui: &mut Ui) {
         let available_size = ui.available_size();
         let border_color = Color32::from_rgb(60, 60, 60);
-        
+
         ui.vertical(|ui| {
             // Obere Zeile mit Überschrift, Texteingabefeld und Save-Button
             ui.horizontal(|ui| {
@@ -279,15 +327,16 @@ impl OpencontrollerUI {
                 ui.add(
                     TextEdit::singleline(&mut self.main_menu_data.new_session_name)
                         .hint_text(self.main_menu_data.current_session_name.as_str()),
-                );           
+                );
                 if ui.button("Save").clicked() {
                     debug!("Saving Session");
                     // Platzhaltercode für die asynchrone Speicherung - wird später manuell ergänzt
-                    let current_session = String::from_str("Hier Sessioncreation einfügen").unwrap();
+                    let current_session =
+                        String::from_str("Hier Sessioncreation einfügen").unwrap();
                     // TODO: hier noch zu session vektorhinzufügen und abspeichern
                 }
             });
-            
+
             // Session-Liste im Stil des message_log
             Frame::new()
                 .fill(ui.visuals().extreme_bg_color)
@@ -295,10 +344,12 @@ impl OpencontrollerUI {
                 .show(ui, |ui| {
                     let list_height = available_size.y - 40.0; // Höhe abzüglich des oberen Bereichs
                     ui.set_min_size(vec2(available_size.x, list_height));
-                    
+
                     ScrollArea::vertical().show(ui, |ui| {
                         ui.vertical(|ui| {
-                            for (index, _session) in self.main_menu_data.previous_sessions.iter().enumerate() {
+                            for (index, _session) in
+                                self.main_menu_data.previous_sessions.iter().enumerate()
+                            {
                                 Frame::new()
                                     .stroke(Stroke::new(1.0, border_color))
                                     .inner_margin(2)
@@ -321,7 +372,7 @@ impl OpencontrollerUI {
                                     });
                                 ui.add_space(2.0);
                             }
-                            
+
                             // Falls keine Sessions vorhanden sind, einen Platzhalter anzeigen
                             if self.main_menu_data.previous_sessions.is_empty() {
                                 ui.label("No saved sessions available");
@@ -673,7 +724,6 @@ impl OpencontrollerUI {
                             Frame::new()
                                 .stroke(Stroke::new(1.0, border_color))
                                 .inner_margin(2)
-                                
                                 .fill(Color32::from_rgb(20, 20, 20))
                                 .show(ui, |ui| {
                                     if ui
@@ -718,48 +768,44 @@ impl OpencontrollerUI {
                 ui.label("No Transmitter found");
             }
         });
-    
+
         let available_size = ui.available_size();
         let border_color = Color32::from_rgb(60, 60, 60);
         let background_color = ui.visuals().extreme_bg_color;
-        
+
         // Berechnung der Spaltenbreiten (ca. 70% links, 30% rechts)
         let left_width = available_size.x * 0.7;
-        let right_width = available_size.x * 0.3 -40.0;
+        let right_width = available_size.x * 0.3 - 40.0;
         let panel_height = available_size.y - 30.0; // Höhe abzüglich Header
-        
+
         ui.horizontal(|ui| {
             // Linke Spalte - Telemetrie
             ui.vertical(|ui| {
                 ui.set_min_width(left_width);
-                
+
                 // Telemetrie-Box mit Überschrift und Inhalt
-                Frame::new()
-                    .inner_margin(4)
-                    .show(ui, |ui| {
-                        ui.set_min_width(left_width);
-                        // Überschrift der Telemetrie-Box
-                        ui.heading("Telemetrie");
-                        
-                        // Inhalt der Telemetrie-Box
-                        Frame::new()
-                            .stroke(Stroke::new(1.0, border_color))
-                            .fill(background_color) 
-                            .inner_margin(4.0)
-                            .show(ui, |ui| {
-                                ui.set_min_width(left_width);
-                                ui.set_min_height(panel_height - 30.0); // Höhe abzüglich Überschrift
-                                ui.label("Hier kommt Telemetrie");
-                            });
-                    });
+                Frame::new().inner_margin(4).show(ui, |ui| {
+                    ui.set_min_width(left_width);
+                    // Überschrift der Telemetrie-Box
+                    ui.heading("Telemetrie");
+
+                    // Inhalt der Telemetrie-Box
+                    Frame::new()
+                        .stroke(Stroke::new(1.0, border_color))
+                        .fill(background_color)
+                        .inner_margin(4.0)
+                        .show(ui, |ui| {
+                            ui.set_min_width(left_width);
+                            ui.set_min_height(panel_height - 30.0); // Höhe abzüglich Überschrift
+                            ui.label("Hier kommt Telemetrie");
+                        });
+                });
             });
-    
-            
-    
+
             // Rechte Spalte - Steuerelemente
             ui.vertical(|ui| {
-                ui.set_max_width(right_width );
-                
+                ui.set_max_width(right_width);
+
                 // Scan-Bereich mit Button und Dropdown
                 Frame::new()
                     .stroke(Stroke::new(1.0, border_color))
@@ -769,13 +815,12 @@ impl OpencontrollerUI {
                     .outer_margin(0.0)
                     .show(ui, |ui| {
                         ui.set_min_width(right_width);
-                        ui.vertical(|ui|{
-
+                        ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 if ui.button("Scan").clicked() {
                                     // Scan for connections
                                 }
-                                
+
                                 egui::ComboBox::from_id_salt("Connections")
                                     .selected_text(&self.elrs_menu_data.connection)
                                     .width(right_width - 70.0) // Breite anpassen
@@ -788,7 +833,6 @@ impl OpencontrollerUI {
                                             );
                                         }
                                     });
-                                    
                             });
 
                             ui.add_space(4.0);
@@ -796,7 +840,7 @@ impl OpencontrollerUI {
                                 if ui.button("Live Connect").clicked() {
                                     // Live connect functionality
                                 }
-                                
+
                                 let status = if self.elrs_menu_data.live_connect {
                                     "Live On"
                                 } else {
@@ -806,12 +850,10 @@ impl OpencontrollerUI {
                                 ui.label(status);
                             });
                         });
-                        
                     });
             });
         });
     }
-
 
     fn settings_menu(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
@@ -951,6 +993,8 @@ impl OpencontrollerUI {
 
 impl eframe::App for OpencontrollerUI {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.log_controller_state();
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.ctx().request_repaint_after(Duration::from_millis(30));
             let width = ui.available_width() - 60.0;
