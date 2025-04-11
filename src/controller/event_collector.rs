@@ -26,14 +26,14 @@ pub enum RawControllerEvent {
 }
 
 // Joystick type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoystickType {
     Left,
     Right,
 }
 
 // Trigger type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerType {
     Left,
     Right,
