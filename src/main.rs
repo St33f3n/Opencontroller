@@ -1,9 +1,8 @@
 #![crate_name = "opencontroller"]
 pub mod config;
 pub mod controller;
-pub mod ui;
 pub mod mapping;
-
+pub mod ui;
 
 use crate::controller::controller::{
     ButtonEvent, ButtonState, ControllerHandle, ControllerOutput, ControllerSettings,

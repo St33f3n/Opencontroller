@@ -992,6 +992,8 @@ impl OpencontrollerUI {
 }
 
 impl eframe::App for OpencontrollerUI {
+
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.log_controller_state();
 

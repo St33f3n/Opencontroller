@@ -119,7 +119,7 @@ pub struct EventCollector<S: CollectionState> {
 
     // Channel for sending events to processor
     event_sender: mpsc::Sender<RawControllerEvent>,
-    
+
     // Last seen joystick values (to calculate deltas)
     last_left_stick_x: f32,
     last_left_stick_y: f32,
@@ -155,7 +155,7 @@ impl EventCollector<Initializing> {
             Ok(g) => {
                 info!("Successfully initialized gilrs");
                 g
-            },
+            }
             Err(e) => {
                 error!("Failed to initialize gilrs: {}", e);
                 return Err(CollectorError::InitializationError(e.to_string()));
@@ -177,30 +177,37 @@ impl EventCollector<Initializing> {
 
     // Initialize the controller and transition to Collecting state
     pub fn initialize(mut self) -> Result<EventCollector<Collecting>, CollectorError> {
-        info!("Initializing Event Collector with deadzone: {}", self.settings.joystick_deadzone);
-        
+        info!(
+            "Initializing Event Collector with deadzone: {}",
+            self.settings.joystick_deadzone
+        );
+
         // Find an active gamepad
         let gamepads: Vec<(GamepadId, Gamepad<'_>)> = self.gilrs.gamepads().collect();
-        
+
         if gamepads.is_empty() {
             warn!("No gamepad connected, continuing in idle mode");
         } else {
             info!("Found {} gamepads:", gamepads.len());
             for (idx, (id, gamepad)) in gamepads.iter().enumerate() {
-                info!("  [{}] ID: {}, Name: {}, UUID: {:?}", 
-                      idx, id, gamepad.name(), gamepad.uuid());
+                info!(
+                    "  [{}] ID: {}, Name: {}, UUID: {:?}",
+                    idx,
+                    id,
+                    gamepad.name(),
+                    gamepad.uuid()
+                );
             }
-            
+
             // Try to use the first gamepad, or the second if available
             let index = if gamepads.len() > 1 { 1 } else { 0 };
             let (id, gamepad) = &gamepads[index];
             self.active_gamepad = Some(*id);
             info!("Selected gamepad: {} ({})", gamepad.name(), id);
-            
+
             // Log connected buttons and axes for debugging
-            
         }
-        
+
         info!("Event Collector initialized, transitioning to Collecting state");
         Ok(self.transition())
     }
@@ -211,29 +218,40 @@ impl EventCollector<Collecting> {
     // Collect a single event and send it to the queue
     pub fn collect_next_event(&mut self) -> Result<(), CollectorError> {
         // Check for next event
-        if let Some(Event { id, event, time, .. }) = self.gilrs.next_event() {
+        if let Some(Event {
+            id, event, time, ..
+        }) = self.gilrs.next_event()
+        {
             // Only process events from the active gamepad if one is set
             if let Some(active_id) = self.active_gamepad {
                 if id != active_id {
                     debug!("Skipping event from non-active gamepad: {:?}", id);
-                    return Ok(());  // Skip events from other gamepads
+                    return Ok(()); // Skip events from other gamepads
                 }
             }
-            
+
             // Log the raw event at debug level
             debug!("Processing gilrs event: {:?} at time: {:?}", event, time);
-            
+
             // Convert gilrs event to our internal event type with chrono timestamp
             if let Some(raw_event) = self.convert_gilrs_event(event) {
                 // Log important button events at info level
                 match &raw_event {
-                    RawControllerEvent::ButtonEvent { button_type, button_state, timestamp } => {
-                        info!("Button event: {:?} {:?} at {}",
-                              button_type, button_state, timestamp.format("%H:%M:%S.%3f"));
-                    },
+                    RawControllerEvent::ButtonEvent {
+                        button_type,
+                        button_state,
+                        timestamp,
+                    } => {
+                        info!(
+                            "Button event: {:?} {:?} at {}",
+                            button_type,
+                            button_state,
+                            timestamp.format("%H:%M:%S.%3f")
+                        );
+                    }
                     _ => debug!("Captured event: {:?}", raw_event),
                 }
-                
+
                 // Send the event to the processor queue
                 match self.event_sender.try_send(raw_event) {
                     Ok(_) => debug!("Event sent to processor queue"),
@@ -253,12 +271,12 @@ impl EventCollector<Collecting> {
     // Run the collector in a loop
     pub fn run_collection_loop(&mut self) -> Result<(), CollectorError> {
         info!("Starting Event Collector loop");
-        
+
         // For performance monitoring
         let mut event_count = 0;
         let mut last_log_time = Local::now();
         let log_interval = chrono::Duration::seconds(10);
-        
+
         loop {
             // This is a non-blocking call that checks for new events
             if let Err(e) = self.collect_next_event() {
@@ -268,18 +286,20 @@ impl EventCollector<Collecting> {
                 // Increment event counter for stats
                 event_count += 1;
             }
-            
+
             // Log performance stats periodically
             let now = Local::now();
             if now - last_log_time > log_interval {
-                info!("Event Collector stats: processed {} events in last {} seconds (avg {:.2}/sec)",
-                      event_count,
-                      log_interval.num_seconds(),
-                      event_count as f64 / log_interval.num_seconds() as f64);
+                info!(
+                    "Event Collector stats: processed {} events in last {} seconds (avg {:.2}/sec)",
+                    event_count,
+                    log_interval.num_seconds(),
+                    event_count as f64 / log_interval.num_seconds() as f64
+                );
                 event_count = 0;
                 last_log_time = now;
             }
-            
+
             // Small sleep to prevent 100% CPU usage
             // This is a compromise between responsiveness and CPU usage
             std::thread::sleep(std::time::Duration::from_micros(100));
@@ -288,23 +308,25 @@ impl EventCollector<Collecting> {
 
     // Convert gilrs event to internal event type with chrono timestamp
     fn convert_gilrs_event(&mut self, event: EventType) -> Option<RawControllerEvent> {
-        let now = Local::now();  // Use chrono for precise timestamp
-        
+        let now = Local::now(); // Use chrono for precise timestamp
+
         match event {
             EventType::AxisChanged(axis, value, _) => {
                 debug!("Axis changed: {:?} = {:.4}", axis, value);
-                
+
                 match axis {
                     Axis::LeftStickX => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         let delta = new_value - self.last_left_stick_x;
-                        
+
                         // Only log significant changes to avoid spam
                         if delta.abs() > 0.05 {
-                            debug!("Left stick X: {:.4} -> {:.4} (delta: {:.4})", 
-                                  self.last_left_stick_x, new_value, delta);
+                            debug!(
+                                "Left stick X: {:.4} -> {:.4} (delta: {:.4})",
+                                self.last_left_stick_x, new_value, delta
+                            );
                         }
-                        
+
                         let raw_event = RawControllerEvent::JoystickMove {
                             stick: JoystickType::Left,
                             x: new_value,
@@ -313,16 +335,18 @@ impl EventCollector<Collecting> {
                         };
                         self.last_left_stick_x = new_value;
                         Some(raw_event)
-                    },
+                    }
                     Axis::LeftStickY => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         let delta = new_value - self.last_left_stick_y;
-                        
+
                         if delta.abs() > 0.05 {
-                            debug!("Left stick Y: {:.4} -> {:.4} (delta: {:.4})", 
-                                  self.last_left_stick_y, new_value, delta);
+                            debug!(
+                                "Left stick Y: {:.4} -> {:.4} (delta: {:.4})",
+                                self.last_left_stick_y, new_value, delta
+                            );
                         }
-                        
+
                         let raw_event = RawControllerEvent::JoystickMove {
                             stick: JoystickType::Left,
                             x: self.last_left_stick_x,
@@ -331,16 +355,18 @@ impl EventCollector<Collecting> {
                         };
                         self.last_left_stick_y = new_value;
                         Some(raw_event)
-                    },
+                    }
                     Axis::RightStickX => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         let delta = new_value - self.last_right_stick_x;
-                        
+
                         if delta.abs() > 0.05 {
-                            debug!("Right stick X: {:.4} -> {:.4} (delta: {:.4})", 
-                                  self.last_right_stick_x, new_value, delta);
+                            debug!(
+                                "Right stick X: {:.4} -> {:.4} (delta: {:.4})",
+                                self.last_right_stick_x, new_value, delta
+                            );
                         }
-                        
+
                         let raw_event = RawControllerEvent::JoystickMove {
                             stick: JoystickType::Right,
                             x: new_value,
@@ -349,16 +375,18 @@ impl EventCollector<Collecting> {
                         };
                         self.last_right_stick_x = new_value;
                         Some(raw_event)
-                    },
+                    }
                     Axis::RightStickY => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         let delta = new_value - self.last_right_stick_y;
-                        
+
                         if delta.abs() > 0.05 {
-                            debug!("Right stick Y: {:.4} -> {:.4} (delta: {:.4})", 
-                                  self.last_right_stick_y, new_value, delta);
+                            debug!(
+                                "Right stick Y: {:.4} -> {:.4} (delta: {:.4})",
+                                self.last_right_stick_y, new_value, delta
+                            );
                         }
-                        
+
                         let raw_event = RawControllerEvent::JoystickMove {
                             stick: JoystickType::Right,
                             x: self.last_right_stick_x,
@@ -367,39 +395,43 @@ impl EventCollector<Collecting> {
                         };
                         self.last_right_stick_y = new_value;
                         Some(raw_event)
-                    },
+                    }
                     Axis::LeftZ => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         if new_value > 0.1 {
                             debug!("Left trigger: {:.4}", new_value);
                         }
-                        
+
                         Some(RawControllerEvent::TriggerMove {
                             trigger: TriggerType::Left,
                             value: new_value,
                             timestamp: now,
                         })
-                    },
+                    }
                     Axis::RightZ => {
                         let new_value = apply_deadzone(value, self.settings.joystick_deadzone);
                         if new_value > 0.1 {
                             debug!("Right trigger: {:.4}", new_value);
                         }
-                        
+
                         Some(RawControllerEvent::TriggerMove {
                             trigger: TriggerType::Right,
                             value: new_value,
                             timestamp: now,
                         })
-                    },
+                    }
                     _ => {
                         debug!("Ignoring unsupported axis: {:?}", axis);
                         None
-                    },
+                    }
                 }
-            },
+            }
             EventType::ButtonPressed(button, _) => {
-                info!("Button pressed: {:?} at {}", button, now.format("%H:%M:%S.%3f"));
+                info!(
+                    "Button pressed: {:?} at {}",
+                    button,
+                    now.format("%H:%M:%S.%3f")
+                );
                 map_button(button).map(|button_type| {
                     debug!("Mapped to button type: {:?}", button_type);
                     RawControllerEvent::ButtonEvent {
@@ -410,7 +442,11 @@ impl EventCollector<Collecting> {
                 })
             }
             EventType::ButtonReleased(button, _) => {
-                info!("Button released: {:?} at {}", button, now.format("%H:%M:%S.%3f"));
+                info!(
+                    "Button released: {:?} at {}",
+                    button,
+                    now.format("%H:%M:%S.%3f")
+                );
                 map_button(button).map(|button_type| {
                     debug!("Mapped to button type: {:?}", button_type);
                     RawControllerEvent::ButtonEvent {
@@ -447,10 +483,12 @@ pub struct CollectorHandle {
 
 impl CollectorHandle {
     // Create a new collector and spawn it as a tokio task
-    pub fn spawn(settings: Option<CollectorSettings>, event_sender: mpsc::Sender<RawControllerEvent>) -> Result<Self, CollectorError> {
+    pub fn spawn(
+        settings: Option<CollectorSettings>,
+        event_sender: mpsc::Sender<RawControllerEvent>,
+    ) -> Result<Self, CollectorError> {
         info!("Spawning Event Collector with settings: {:?}", settings);
-        
-            
+
         // Save a clone of the sender to return
         let sender_clone = event_sender.clone();
 
@@ -476,11 +514,13 @@ impl CollectorHandle {
                 }
             }
         });
-        
+
         debug!("Tokio task spawned with handle: {:?}", task_handle);
         info!("Event Collector successfully started");
 
-        Ok(Self { event_sender: sender_clone })
+        Ok(Self {
+            event_sender: sender_clone,
+        })
     }
 
     // Get a sender for raw events

@@ -1,14 +1,14 @@
-use chrono::{DateTime, Local, Duration};
+use chrono::{DateTime, Duration, Local};
+use statum::{machine, state};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use statum::{machine, state};
 use tokio::sync::{mpsc, watch};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 // Import shared types from event_collector
 use crate::controller::event_collector::{
-    ButtonState, ButtonType, JoystickType, RawControllerEvent, TriggerType
+    ButtonState, ButtonType, JoystickType, RawControllerEvent, TriggerType,
 };
 
 // Button event state
@@ -224,7 +224,7 @@ impl EventProcessor<Waiting> {
     // Wait for interval and then collect events from queue
     pub async fn wait_and_collect(mut self) -> Result<EventProcessor<Processing>, ProcessorError> {
         debug!("Collecting events from queue");
-        
+
         // Collect all available events from the channel
         let mut events = Vec::new();
 
@@ -235,28 +235,41 @@ impl EventProcessor<Waiting> {
                 Ok(event) => {
                     debug!("Received event from queue: {:?}", event);
                     events.push(event);
-                },
+                }
                 Err(mpsc::error::TryRecvError::Empty) => {
                     debug!("Event queue empty, processed {} events", events.len());
                     break; // No more events available
-                },
+                }
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     error!("Event channel disconnected!");
-                    return Err(ProcessorError::EventReceiveError("Event channel disconnected".to_string()))
+                    return Err(ProcessorError::EventReceiveError(
+                        "Event channel disconnected".to_string(),
+                    ));
                 }
             }
         }
 
         // Create event batch for processing state
-        let event_batch = EventBatch { events: events.clone() };
+        let event_batch = EventBatch {
+            events: events.clone(),
+        };
         if !events.is_empty() {
             info!("Collected batch of {} events for processing", events.len());
-            
+
             // Log button events at debug level
             for event in &events {
-                if let RawControllerEvent::ButtonEvent { button_type, button_state, timestamp } = event {
-                    debug!("Queue contained button event: {:?} {:?} at {}", 
-                          button_type, button_state, timestamp.format("%H:%M:%S.%3f"));
+                if let RawControllerEvent::ButtonEvent {
+                    button_type,
+                    button_state,
+                    timestamp,
+                } = event
+                {
+                    debug!(
+                        "Queue contained button event: {:?} {:?} at {}",
+                        button_type,
+                        button_state,
+                        timestamp.format("%H:%M:%S.%3f")
+                    );
                 }
             }
         } else {
@@ -274,7 +287,7 @@ impl EventProcessor<Processing> {
     // Process events and transition to Updating state
     pub fn process_events(mut self) -> Result<EventProcessor<Updating>, ProcessorError> {
         debug!("Processing event batch");
-        
+
         // Get events from state data
         let raw_events = if let Some(event_batch) = self.get_state_data() {
             debug!("Found event batch with {} events", event_batch.events.len());
@@ -287,43 +300,58 @@ impl EventProcessor<Processing> {
 
         // Check if we have pending button releases that need processing
         let has_pending_releases = !self.pending_button_releases.is_empty();
-        
+
         if raw_events.is_empty() && !has_pending_releases {
-            debug!("No events to process and no pending button releases, clearing button events only");
+            debug!(
+                "No events to process and no pending button releases, clearing button events only"
+            );
             // No new events to process and no pending releases, just clear events
             self.output.button_events.clear();
         } else {
             // Process all types of events
             if raw_events.is_empty() {
-                debug!("No new events but have {} pending button releases - processing", 
-                      self.pending_button_releases.len());
+                debug!(
+                    "No new events but have {} pending button releases - processing",
+                    self.pending_button_releases.len()
+                );
             } else {
                 debug!("Processing {} raw events", raw_events.len());
                 // Process joystick and trigger events only if we have new raw events
                 self.process_joystick_events(&raw_events)?;
                 self.process_trigger_events(&raw_events)?;
             }
-            
+
             // Always process button events if we have new events OR pending releases
             self.process_button_events(&raw_events)?;
-            
+
             // Log button events in result
             if !self.output.button_events.is_empty() {
-                info!("Processed {} button events:", self.output.button_events.len());
+                info!(
+                    "Processed {} button events:",
+                    self.output.button_events.len()
+                );
                 for (i, event) in self.output.button_events.iter().enumerate() {
-                    info!("  [{}] Button: {:?}, Duration: {:.2}ms, State: {:?}", 
-                         i, event.button, event.duration_ms, event.state);
+                    info!(
+                        "  [{}] Button: {:?}, Duration: {:.2}ms, State: {:?}",
+                        i, event.button, event.duration_ms, event.state
+                    );
                 }
             }
-            
+
             // Log pending buttons
             if has_pending_releases {
-                debug!("Pending button releases: {}", self.pending_button_releases.len());
+                debug!(
+                    "Pending button releases: {}",
+                    self.pending_button_releases.len()
+                );
                 for (button, release) in &self.pending_button_releases {
                     let now = Local::now();
                     let duration = now - release.timestamp;
-                    debug!("  Button {:?} pressed for {:.2}ms so far", 
-                          button, duration.num_milliseconds());
+                    debug!(
+                        "  Button {:?} pressed for {:.2}ms so far",
+                        button,
+                        duration.num_milliseconds()
+                    );
                 }
             }
         }
@@ -572,16 +600,20 @@ impl EventProcessor<Processing> {
     ) -> Result<(), ProcessorError> {
         // Clear existing button events
         self.output.button_events.clear();
-        
+
         // Group events by button
-        let mut events_per_button: HashMap<ButtonType, Vec<(ButtonState, DateTime<Local>)>> = HashMap::new();
+        let mut events_per_button: HashMap<ButtonType, Vec<(ButtonState, DateTime<Local>)>> =
+            HashMap::new();
 
         // Add pending button releases to the event map
         for (button, release) in &self.pending_button_releases {
-            debug!("Pending Release Type: {:?}, Timestamp: {:?}", button, release.timestamp);
+            debug!(
+                "Pending Release Type: {:?}, Timestamp: {:?}",
+                button, release.timestamp
+            );
             events_per_button.insert(
-                button.clone(), 
-                vec![(ButtonState::Pressed, release.timestamp)]
+                button.clone(),
+                vec![(ButtonState::Pressed, release.timestamp)],
             );
         }
 
@@ -597,7 +629,10 @@ impl EventProcessor<Processing> {
             } = event
             {
                 if !events_per_button.contains_key(button_type) {
-                    events_per_button.insert(button_type.clone(), vec![(button_state.clone(), *timestamp)]);
+                    events_per_button.insert(
+                        button_type.clone(),
+                        vec![(button_state.clone(), *timestamp)],
+                    );
                 } else {
                     events_per_button
                         .get_mut(button_type)
@@ -625,11 +660,11 @@ impl EventProcessor<Processing> {
                     // Check if there's a corresponding Release event
                     if i + 1 < events.len() && events[i + 1].0 == ButtonState::Released {
                         let next_event = &events[i + 1];
-                        
+
                         // Calculate duration using chrono
                         let duration = next_event.1 - event.1;
                         let duration_ms = duration.num_milliseconds() as f64;
-                        
+
                         debug!("Button {:?} press duration: {}ms", button, duration_ms);
 
                         // Add button event with precise duration
@@ -643,20 +678,23 @@ impl EventProcessor<Processing> {
                         i += 2;
                     } else {
                         // No release event found - button is still held
-                        
+
                         // Calculate duration from press time to now
                         let duration = now - event.1;
                         let duration_ms = duration.num_milliseconds() as f64;
-                        
-                        debug!("Button {:?} press duration: {}ms (Held)", button, duration_ms);
-                        
+
+                        debug!(
+                            "Button {:?} press duration: {}ms (Held)",
+                            button, duration_ms
+                        );
+
                         // Add button event with calculated duration and Held state
                         processed_button_events.push(ButtonEvent {
                             button: button.clone(),
                             duration_ms,
                             state: ButtonEventState::Held,
                         });
-                        
+
                         // Save as pending for next cycle
                         debug!("Saving pending button release for {:?}", button);
                         self.pending_button_releases
@@ -667,7 +705,10 @@ impl EventProcessor<Processing> {
                     }
                 } else if event.0 == ButtonState::Released {
                     // A Release without a Pressed - unusual situation
-                    error!("Found a Released event without a preceding Pressed event: {:?}", event);
+                    error!(
+                        "Found a Released event without a preceding Pressed event: {:?}",
+                        event
+                    );
                     i += 1;
                 }
             }
@@ -684,7 +725,7 @@ impl EventProcessor<Updating> {
     // Update the shared state and transition back to Waiting state
     pub fn update_state(self) -> Result<EventProcessor<Waiting>, ProcessorError> {
         debug!("Updating controller state through watch channel");
-        
+
         // Prepare debug summary
         let summary = format!(
             "L:({:.2},{:.2}) R:({:.2},{:.2}) LT:{:.2} RT:{:.2} Buttons:{}",
@@ -696,20 +737,24 @@ impl EventProcessor<Updating> {
             self.output.right_trigger.value,
             self.output.button_events.len()
         );
-        
+
         // Send updated state through watch channel
         match self.state_sender.send(self.output.clone()) {
             Ok(_) => {
                 debug!("State updated successfully: {}", summary);
                 if !self.output.button_events.is_empty() {
-                    info!("Broadcasting {} button events to UI and ELRS", self.output.button_events.len());
+                    info!(
+                        "Broadcasting {} button events to UI and ELRS",
+                        self.output.button_events.len()
+                    );
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to update controller state: {}", e);
-                return Err(ProcessorError::StateUpdateError(
-                    format!("Failed to send state update: {}", e)
-                ));
+                return Err(ProcessorError::StateUpdateError(format!(
+                    "Failed to send state update: {}",
+                    e
+                )));
             }
         }
 
@@ -731,7 +776,7 @@ impl ProcessorHandle {
         settings: Option<ProcessorSettings>,
     ) -> Result<Self, ProcessorError> {
         info!("Spawning Event Processor with settings: {:?}", settings);
-        
+
         // Initialize processor in Waiting state
         let processor = EventProcessor::create(event_receiver, settings)?;
 
@@ -749,7 +794,7 @@ impl ProcessorHandle {
                 info!("Event Processor task finished successfully"); // This shouldn't happen in practice
             }
         });
-        
+
         debug!("Tokio task spawned with handle: {:?}", task_handle);
         info!("Event Processor successfully started");
 
@@ -763,9 +808,7 @@ impl ProcessorHandle {
 }
 
 // Run the processor loop
-async fn run_processor_loop(
-    mut processor: EventProcessor<Waiting>,
-) -> Result<(), ProcessorError> {
+async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<(), ProcessorError> {
     let settings = processor.settings().clone();
     info!(
         "Starting processor loop with {}ms interval",
@@ -773,29 +816,35 @@ async fn run_processor_loop(
     );
 
     // Create interval for processing cycle
-    let mut interval_timer = tokio::time::interval(
-        tokio::time::Duration::from_millis(settings.processing_interval_ms)
-    );
-    
+    let mut interval_timer = tokio::time::interval(tokio::time::Duration::from_millis(
+        settings.processing_interval_ms,
+    ));
+
     // Stats for performance monitoring
     let mut cycles = 0;
     let mut total_events = 0;
     let mut last_stats_time = Local::now();
     let stats_interval = chrono::Duration::seconds(30);
-    
+
     // Main processor loop
     info!("Entering main processor loop");
     loop {
-        debug!("Waiting for next interval tick ({} ms)", settings.processing_interval_ms);
+        debug!(
+            "Waiting for next interval tick ({} ms)",
+            settings.processing_interval_ms
+        );
         // Wait for the next interval tick
         interval_timer.tick().await;
-        
+
         let cycle_start = Local::now();
-        debug!("Starting processing cycle at {}", cycle_start.format("%H:%M:%S.%3f"));
+        debug!(
+            "Starting processing cycle at {}",
+            cycle_start.format("%H:%M:%S.%3f")
+        );
 
         // Run one cycle of the processor state machine
         let processing_state = processor.wait_and_collect().await?;
-        
+
         // Count events in this cycle for stats
         let event_count = if let Some(event_batch) = processing_state.get_state_data() {
             event_batch.events.len()
@@ -803,29 +852,36 @@ async fn run_processor_loop(
             0
         };
         total_events += event_count;
-        
+
         let updating_state = processing_state.process_events()?;
         processor = updating_state.update_state()?;
-        
+
         // Increment cycle counter
         cycles += 1;
-        
+
         // Calculate cycle duration
         let cycle_end = Local::now();
         let cycle_duration = cycle_end - cycle_start;
-        debug!("Processing cycle completed in {:.2} ms", cycle_duration.num_milliseconds());
-        
+        debug!(
+            "Processing cycle completed in {:.2} ms",
+            cycle_duration.num_milliseconds()
+        );
+
         // Log stats periodically
         let now = Local::now();
         if now - last_stats_time > stats_interval {
             let elapsed_seconds = (now - last_stats_time).num_seconds();
-            info!("Processor stats: {} cycles, {} events in {} seconds", 
-                 cycles, total_events, elapsed_seconds);
-            info!("Average: {:.2} events/cycle, {:.2} cycles/sec, {:.2} events/sec",
-                 total_events as f64 / cycles as f64,
-                 cycles as f64 / elapsed_seconds as f64,
-                 total_events as f64 / elapsed_seconds as f64);
-            
+            info!(
+                "Processor stats: {} cycles, {} events in {} seconds",
+                cycles, total_events, elapsed_seconds
+            );
+            info!(
+                "Average: {:.2} events/cycle, {:.2} cycles/sec, {:.2} events/sec",
+                total_events as f64 / cycles as f64,
+                cycles as f64 / elapsed_seconds as f64,
+                total_events as f64 / elapsed_seconds as f64
+            );
+
             // Reset counters
             cycles = 0;
             total_events = 0;
@@ -833,11 +889,14 @@ async fn run_processor_loop(
         }
 
         // Check if interval time needs to be updated (in case settings changed)
-        let new_interval_time = 
+        let new_interval_time =
             tokio::time::Duration::from_millis(processor.settings().processing_interval_ms);
-        
+
         if new_interval_time != interval_timer.period() {
-            info!("Updating interval time to {} ms", processor.settings().processing_interval_ms);
+            info!(
+                "Updating interval time to {} ms",
+                processor.settings().processing_interval_ms
+            );
             interval_timer = tokio::time::interval(new_interval_time);
         }
     }

@@ -3,17 +3,22 @@
 //! Dieses Modul enthält die Kernimplementierung der Mapping Engine
 //! mit allen Zustandsübergängen und der Verarbeitungslogik.
 
-use std::time::Duration;
 use statum::{machine, state};
+use std::time::Duration;
 use tokio::{
-    select, sync::{mpsc::{self, error::TrySendError}, watch}, time::{self, Instant}
+    select,
+    sync::{
+        mpsc::{self, error::TrySendError},
+        watch,
+    },
+    time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
 
 use crate::controller::controller::ControllerOutput;
 use crate::mapping::mapping_config::MappingConfig;
 use crate::mapping::mapping_types::{
-    MappedEvent, MappingError, has_significant_changes, ProcessingData
+    has_significant_changes, MappedEvent, MappingError, ProcessingData,
 };
 
 /// Tracking-Informationen für Controller-Updates
@@ -50,22 +55,22 @@ pub enum MappingEngineState {
 pub struct MappingEngine<S: MappingEngineState> {
     /// Empfänger für Controller-Output
     input_receiver: mpsc::Receiver<ControllerOutput>,
-    
+
     /// Sender für gemappte Events
     output_sender: mpsc::Sender<MappedEvent>,
-    
+
     /// Letzter verarbeiteter Controller-Output (für Änderungserkennung)
     previous_output: Option<ControllerOutput>,
-    
+
     /// Aktuelle Mapping-Konfiguration
     config: Box<dyn MappingConfig>,
-    
+
     /// Metriken für die Verarbeitung
     metrics: UpdateMetrics,
-    
+
     /// Zeitintervall zwischen Status-Logs (in Sekunden)
     log_interval_seconds: u64,
-    
+
     /// Zeitpunkt des letzten Status-Logs
     last_log_time: Instant,
 }
@@ -76,18 +81,18 @@ impl<S: MappingEngineState> MappingEngine<S> {
     pub fn config_name(&self) -> &str {
         self.config.name()
     }
-    
+
     /// Protokolliert Metriken, wenn das Log-Intervall abgelaufen ist
     fn log_metrics_if_due(&mut self) {
         let now = Instant::now();
         if now.duration_since(self.last_log_time).as_secs() >= self.log_interval_seconds {
             let efficiency = if self.metrics.total_updates > 0 {
-                100.0 * (self.metrics.total_updates - self.metrics.filtered_updates) as f64 
+                100.0 * (self.metrics.total_updates - self.metrics.filtered_updates) as f64
                     / self.metrics.total_updates as f64
             } else {
                 0.0
             };
-            
+
             info!(
                 "Mapping Engine stats: {} updates processed, {} filtered ({:.1}% efficiency), {} events produced",
                 self.metrics.total_updates,
@@ -95,12 +100,12 @@ impl<S: MappingEngineState> MappingEngine<S> {
                 efficiency,
                 self.metrics.events_produced
             );
-            
+
             debug!(
                 "Last processing time: {:.2}ms",
                 self.metrics.last_processing_time.as_micros() as f64 / 1000.0
             );
-            
+
             // Metriken zurücksetzen
             self.metrics = UpdateMetrics::default();
             self.last_log_time = now;
@@ -126,12 +131,15 @@ impl MappingEngine<Initializing> {
             Instant::now(),
         )
     }
-    
+
     /// Initialisiert die Mapping Engine und wechselt in den Ready-Zustand
     pub fn initialize(self) -> MappingEngine<Ready> {
-        info!("Initializing Mapping Engine with config: {}", self.config.name());
+        info!(
+            "Initializing Mapping Engine with config: {}",
+            self.config.name()
+        );
         debug!("Config type: {:?}", self.config.config_type());
-        
+
         self.transition()
     }
 }
@@ -141,7 +149,7 @@ impl MappingEngine<Ready> {
     /// Wartet auf Controller-Output und wechselt in den Processing-Zustand
     pub async fn wait_for_input(mut self) -> Result<MappingEngine<Processing>, MappingError> {
         self.log_metrics_if_due();
-        
+
         // Auf Controller-Output warten
         match self.input_receiver.recv().await {
             Some(output) => {
@@ -149,7 +157,7 @@ impl MappingEngine<Ready> {
                 // In den Processing-Zustand wechseln
                 let processing_data = ProcessingData { output };
                 Ok(self.transition_with(processing_data))
-            },
+            }
             None => {
                 // Kanal wurde geschlossen
                 error!("Controller output channel closed");
@@ -157,12 +165,15 @@ impl MappingEngine<Ready> {
             }
         }
     }
-    
+
     /// Wechselt in den ConfigChanging-Zustand
-    pub fn change_config(self, new_config: Box<dyn MappingConfig>) -> MappingEngine<ConfigChanging> {
+    pub fn change_config(
+        self,
+        new_config: Box<dyn MappingConfig>,
+    ) -> MappingEngine<ConfigChanging> {
         info!("Changing mapping configuration to: {}", new_config.name());
         debug!("New config type: {:?}", new_config.config_type());
-        
+
         self.transition_with(new_config)
     }
 }
@@ -172,7 +183,7 @@ impl MappingEngine<Processing> {
     /// Verarbeitet Controller-Output und erzeugt gemappte Events
     pub fn process_output(mut self) -> MappingEngine<Ready> {
         let processing_start = Instant::now();
-        
+
         // Controller-Output aus dem State-Data extrahieren
         let current_output = if let Some(data) = self.get_state_data() {
             data.output.clone()
@@ -181,52 +192,48 @@ impl MappingEngine<Processing> {
             warn!("No output data in Processing state");
             return self.transition();
         };
-        
+
         // Änderungserkennung
         let mut events_to_send = Vec::new();
         let output_changed = match &self.previous_output {
             Some(prev) => has_significant_changes(prev, &current_output),
             None => true, // Erste Verarbeitung
         };
-        
+
         self.metrics.total_updates += 1;
-        
+
         if output_changed {
             debug!("Significant changes detected, applying mapping");
-            
+
             // Mapping anwenden
             events_to_send = self.config.map(&current_output);
             debug!("Produced {} mapped events", events_to_send.len());
-            
+
             // Events senden
             for event in events_to_send.iter() {
                 match self.output_sender.try_send(event.clone()) {
                     Ok(_) => self.metrics.events_produced += 1,
-                    Err(e) => {
-                        match e {
-                            TrySendError::Full(x) => {
-                                warn!("Output channel is full, event dropped");
-                            },
-                            TrySendError::Closed(x) => {
-                                error!("Failed to send mapped event: {:?}", x);
-                            },  
+                    Err(e) => match e {
+                        TrySendError::Full(x) => {
+                            warn!("Output channel is full, event dropped");
                         }
-                            
+                        TrySendError::Closed(x) => {
+                            error!("Failed to send mapped event: {:?}", x);
                         }
-                    }
+                    },
                 }
-            
+            }
         } else {
             self.metrics.filtered_updates += 1;
             debug!("No significant changes, skipping mapping");
         }
-        
+
         // Metriken aktualisieren
         self.metrics.last_processing_time = processing_start.elapsed();
-        
+
         // Aktuellen Output als vorherigen speichern
         self.previous_output = Some(current_output);
-        
+
         // Zurück zum Ready-Zustand
         self.transition()
     }
@@ -236,17 +243,20 @@ impl MappingEngine<Processing> {
 impl MappingEngine<ConfigChanging> {
     /// Wendet die neue Konfiguration an und wechselt in den Ready-Zustand
     pub fn apply_new_config(self) -> MappingEngine<Ready> {
-        info!("Applied new mapping configuration: {}", self.get_state_data().unwrap().name());
-        
+        info!(
+            "Applied new mapping configuration: {}",
+            self.get_state_data().unwrap().name()
+        );
+
         // Wir nehmen die neue Konfiguration aus dem State-Data und wenden sie an
         if let Some(new_config) = self.get_state_data() {
             let mut engine = self.transition();
             engine.config = new_config.clone();
-            
+
             // Vorherigen Output löschen, um bei der nächsten Verarbeitung
             // eine vollständige Neubewertung zu erzwingen
             engine.previous_output = None;
-            
+
             engine
         } else {
             // Sollte nicht vorkommen, da wir im ConfigChanging-Zustand sind
@@ -263,8 +273,11 @@ pub async fn run_mapping_engine(
     mut engine: MappingEngine<Ready>,
     mut config_receiver: mpsc::Receiver<Box<dyn MappingConfig>>,
 ) -> Result<(), MappingError> {
-    info!("Starting mapping engine main loop with config: {}", engine.config_name());
-    
+    info!(
+        "Starting mapping engine main loop with config: {}",
+        engine.config_name()
+    );
+
     loop {
         // Warten auf ControllerOutput oder Konfigurationsänderung
         select! {
