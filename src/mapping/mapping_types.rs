@@ -8,15 +8,25 @@ use eframe::egui::Event;
 use std::fmt;
 use thiserror::Error;
 
+/// Hysterese-Wert für die Region-Erkennung (in Einheitenbereichen, z.B. 0-1.0)
+pub const REGION_HYSTERESIS: f32 = 0.08;
+
 /// Repräsentiert ein gemapptes Event, das von der Mapping Engine erzeugt wird
 #[derive(Clone, Debug)]
 pub enum MappedEvent {
     /// Tastatur-Event für UI-Integration
-    KeyboardEvent { key_code: Event},
+    KeyboardEvent { key_code: Event, state: KeyState },
     /// ELRS-Daten für Drohnensteuerung
     ELRSData { channel: u8, value: u16 },
     /// Custom Event für zukünftige Erweiterungen
     CustomEvent { event_type: String, data: Vec<u8> },
+}
+
+/// Tastenzustand für Keyboard-Events
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeyState {
+    Pressed,
+    Released,
 }
 
 /// Input-Komponententypen für die Mapping-Strategien
@@ -27,7 +37,7 @@ pub enum InputComponent {
     Trigger(TriggerType, f32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Section {
     North,
     NorthEast,
@@ -37,9 +47,10 @@ pub enum Section {
     SouthWest,
     West,
     NorthWest,
+    Center, // Zentrum als Neutralposition hinzugefügt
 }
 
-/// Region-Definition für Joystick-Zonen
+/// Region-Definition für Joystick-Zonen mit Hysterese
 #[derive(Clone, Debug)]
 pub struct Region {
     pub x_min: f32,
@@ -47,23 +58,64 @@ pub struct Region {
     pub y_min: f32,
     pub y_max: f32,
     pub section: Section,
+    // Innere Grenzen für Hysterese
+    pub inner_x_min: f32,
+    pub inner_x_max: f32,
+    pub inner_y_min: f32,
+    pub inner_y_max: f32,
 }
 
 impl Region {
     /// Erstellt eine neue Region mit den angegebenen Grenzen und der zugehörigen Section
     pub fn new(x_min: f32, x_max: f32, y_min: f32, y_max: f32, section: Section) -> Self {
+        // Innere Grenzen für Hysterese berechnen
+        let hysteresis = REGION_HYSTERESIS;
+        let width = x_max - x_min;
+        let height = y_max - y_min;
+        
+        // Hysterese proportional zur Größe der Region
+        let x_hysteresis = width * hysteresis;
+        let y_hysteresis = height * hysteresis;
+        
+        let inner_x_min = x_min + x_hysteresis;
+        let inner_x_max = x_max - x_hysteresis;
+        let inner_y_min = y_min + y_hysteresis;
+        let inner_y_max = y_max - y_hysteresis;
+
         Self {
             x_min,
             x_max,
             y_min,
             y_max,
             section,
+            inner_x_min,
+            inner_x_max,
+            inner_y_min,
+            inner_y_max,
         }
     }
 
-    /// Prüft, ob ein Punkt (x, y) innerhalb der Region liegt
-    pub fn contains(&self, x: f32, y: f32) -> bool {
+    /// Prüft, ob ein Punkt (x, y) innerhalb der äußeren Region liegt (zum Verlassen)
+    pub fn contains_outer(&self, x: f32, y: f32) -> bool {
         x >= self.x_min && x <= self.x_max && y >= self.y_min && y <= self.y_max
+    }
+
+    /// Prüft, ob ein Punkt (x, y) innerhalb der inneren Region liegt (zum Betreten)
+    pub fn contains_inner(&self, x: f32, y: f32) -> bool {
+        x >= self.inner_x_min && x <= self.inner_x_max && y >= self.inner_y_min && y <= self.inner_y_max
+    }
+
+    /// Prüft, ob ein Punkt (x, y) innerhalb der Region liegt, mit Hysterese-Unterstützung
+    /// previous_section gibt an, in welcher Section der Punkt zuvor war
+    pub fn contains(&self, x: f32, y: f32, previous_section: Option<Section>) -> bool {
+        // Wenn der Punkt in der vorherigen Berechnung in dieser Region war,
+        // dann verlässt er die Region erst, wenn er die äußeren Grenzen überschreitet
+        if previous_section == Some(self.section) {
+            return self.contains_outer(x, y);
+        }
+
+        // Ansonsten muss der Punkt die inneren Grenzen überschreiten, um als "in dieser Region" zu gelten
+        self.contains_inner(x, y)
     }
 }
 
