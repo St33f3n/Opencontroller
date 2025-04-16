@@ -33,7 +33,6 @@ pub struct Region {
     pub inner_min_angle: f32,
     pub inner_max_angle: f32,
 
-
     pub min_magnitute: f32,
     pub max_magnitute: f32,
 
@@ -47,7 +46,7 @@ impl Region {
     fn to_polar(x: f32, y: f32) -> (f32, f32) {
         let angle_rad = y.atan2(x);
         let mut angle_deg = angle_rad.to_degrees();
-        
+
         // Konvertieren zu 0-360°, wobei 0° nach Osten zeigt (Standardverhalten von atan2)
         if angle_deg < 0.0 {
             angle_deg += 360.0;
@@ -55,23 +54,29 @@ impl Region {
         let magnitude = (x.powi(2) + y.powi(2)).sqrt().min(1.0);
         // Rotieren, damit 0° an den anfang von Norden zeigt (90° gegen den Uhrzeigersinn)
         let north_oriented = (360.0 + 112.5 - angle_deg) % 360.0;
-        
+
         (north_oriented, magnitude)
     }
-        /// Erstellt eine neue Region mit den angegebenen Grenzen und der zugehörigen Section
-    pub fn new(angle_min: f32, angle_max: f32, mag_min: f32, mag_max: f32, section: Section) -> Self {
+    /// Erstellt eine neue Region mit den angegebenen Grenzen und der zugehörigen Section
+    pub fn new(
+        angle_min: f32,
+        angle_max: f32,
+        mag_min: f32,
+        mag_max: f32,
+        section: Section,
+    ) -> Self {
         // Innere Grenzen für Hysterese berechnen
         let hysteresis = REGION_HYSTERESIS;
-        let angle_span = angle_max-angle_min;
-        let mag_span = mag_max-mag_min;
+        let angle_span = angle_max - angle_min;
+        let mag_span = mag_max - mag_min;
         // Hysterese proportional zur Größe der Region
         let angle_hysteresis = angle_span * hysteresis;
         let mag_hysteresis = mag_span * hysteresis;
 
         let inner_min_angle = angle_min + angle_hysteresis;
-        let inner_max_angle= angle_max - angle_hysteresis;
+        let inner_max_angle = angle_max - angle_hysteresis;
         let inner_min_magnitute = mag_min + mag_hysteresis;
-        let inner_max_magnitute= mag_max - mag_hysteresis;
+        let inner_max_magnitute = mag_max - mag_hysteresis;
 
         Self {
             min_angle: angle_min,
@@ -82,14 +87,17 @@ impl Region {
             max_magnitute: mag_max,
             inner_min_magnitute,
             inner_max_magnitute,
-            section
+            section,
         }
     }
 
     /// Prüft, ob ein Punkt (x, y) innerhalb der äußeren Region liegt (zum Verlassen)
     pub fn contains_outer(&self, x: f32, y: f32) -> bool {
         let (angle, magnitute) = Region::to_polar(x, y);
-        angle >= self.min_angle && angle <= self.max_angle && magnitute >= self.min_magnitute && magnitute <= self.max_magnitute
+        angle >= self.min_angle
+            && angle <= self.max_angle
+            && magnitute >= self.min_magnitute
+            && magnitute <= self.max_magnitute
     }
 
     /// Prüft, ob ein Punkt (x, y) innerhalb der inneren Region liegt (zum Betreten)
@@ -201,9 +209,7 @@ impl KeyboardStrategy {
     }
 
     /// Mappt Joystick-Bewegungen zu Regions
-    fn map_joystick_region(&mut self, controller_state: ControllerOutput) -> (Region, Region){
-        
-    }
+    fn map_joystick_region(&mut self, controller_state: ControllerOutput) -> (Region, Region) {}
 
     fn map_modifiers(
         &self,
@@ -266,7 +272,7 @@ impl KeyboardStrategy {
                             repeat: true,
                             modifiers: modifier.clone(),
                         })
-                    },
+                    }
                     crate::controller::controller::ButtonEventState::Complete => {
                         events.push(Event::Key {
                             key: *key,
@@ -282,7 +288,7 @@ impl KeyboardStrategy {
                             repeat: false,
                             modifiers: modifier.clone(),
                         })
-                    },
+                    }
                 };
 
                 // Status im Kontext speichern
