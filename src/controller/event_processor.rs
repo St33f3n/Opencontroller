@@ -169,8 +169,8 @@ pub struct EventProcessor<S: ProcessingState> {
     // Current controller output state
     output: ControllerOutput,
 
-    // Watch channel sender
-    state_sender: watch::Sender<ControllerOutput>,
+    // mpsc channel sender
+    state_sender: mpsc::Sender<ControllerOutput>,
 
     // Button state tracking with chrono timestamps
     pending_button_releases: HashMap<ButtonType, PendingButtonRelease>,
@@ -178,11 +178,6 @@ pub struct EventProcessor<S: ProcessingState> {
 
 // Implementation of methods available in all states
 impl<S: ProcessingState> EventProcessor<S> {
-    // Helper method to clone output receiver
-    pub fn subscribe(&self) -> watch::Receiver<ControllerOutput> {
-        self.state_sender.subscribe()
-    }
-
     // Helper method to update settings
     pub fn update_settings(&mut self, settings: ProcessorSettings) {
         self.settings = settings;
@@ -198,6 +193,7 @@ impl<S: ProcessingState> EventProcessor<S> {
 impl EventProcessor<Waiting> {
     pub fn create(
         event_receiver: mpsc::Receiver<RawControllerEvent>,
+        output_sender: mpsc::Sender<ControllerOutput>,
         settings: Option<ProcessorSettings>,
     ) -> Result<Self, ProcessorError> {
         let settings = settings.unwrap_or_default();
@@ -207,16 +203,12 @@ impl EventProcessor<Waiting> {
         let output = ControllerOutput::default();
         debug!("Created initial ControllerOutput state");
 
-        // Create watch channel
-        let (state_sender, _) = watch::channel(output.clone());
-        debug!("Created watch channel for controller state broadcasts");
-
         info!("Event Processor created successfully");
         Ok(Self::new(
             event_receiver,
             settings,
             output,
-            state_sender,
+            output_sender,
             HashMap::new(),
         ))
     }
@@ -738,8 +730,10 @@ impl EventProcessor<Updating> {
             self.output.button_events.len()
         );
 
+        let send_result = self.state_sender.try_send(self.output.clone());
+
         // Send updated state through watch channel
-        match self.state_sender.send(self.output.clone()) {
+        match send_result {
             Ok(_) => {
                 debug!("State updated successfully: {}", summary);
                 if !self.output.button_events.is_empty() {
@@ -766,49 +760,37 @@ impl EventProcessor<Updating> {
 
 // Public interface for spawning and running the processor
 pub struct ProcessorHandle {
-    state_receiver: watch::Receiver<ControllerOutput>,
+    state_sender: mpsc::Sender<ControllerOutput>,
 }
 
 impl ProcessorHandle {
     // Create a new processor and spawn it as a tokio task
     pub fn spawn(
         event_receiver: mpsc::Receiver<RawControllerEvent>,
+        output_sender: mpsc::Sender<ControllerOutput>,
         settings: Option<ProcessorSettings>,
     ) -> Result<Self, ProcessorError> {
         info!("Spawning Event Processor with settings: {:?}", settings);
 
-        // Initialize processor in Waiting state
-        let processor = EventProcessor::create(event_receiver, settings)?;
-
-        // Get a receiver for the controller state
-        let state_receiver = processor.subscribe();
-        debug!("Created state receiver for UI and ELRS");
-
-        // Spawn tokio task for processor loop
-        info!("Spawning Event Processor task");
+        // Processor initialisieren
+        let processor = EventProcessor::create(event_receiver,output_sender.clone(), settings)?;
+        
+        // Tokio-Task starten
         let task_handle = tokio::spawn(async move {
-            info!("Event Processor task started");
             if let Err(e) = run_processor_loop(processor).await {
                 error!("Processor task terminated with error: {}", e);
-            } else {
-                info!("Event Processor task finished successfully"); // This shouldn't happen in practice
             }
         });
-
-        debug!("Tokio task spawned with handle: {:?}", task_handle);
-        info!("Event Processor successfully started");
-
-        Ok(Self { state_receiver })
-    }
-
-    // Get a receiver for the controller state
-    pub fn subscribe(&self) -> watch::Receiver<ControllerOutput> {
-        self.state_receiver.clone()
+        
+        Ok(Self { state_sender:output_sender })
     }
 }
 
 // Run the processor loop
-async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<(), ProcessorError> {
+async fn run_processor_loop(
+    mut processor: EventProcessor<Waiting>,
+    
+) -> Result<(), ProcessorError>{
     let settings = processor.settings().clone();
     info!(
         "Starting processor loop with {}ms interval",
@@ -898,6 +880,10 @@ async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<()
                 processor.settings().processing_interval_ms
             );
             interval_timer = tokio::time::interval(new_interval_time);
+        }
+
+        if let Err(e) = processor.state_sender.try_send(processor.output.clone()) {
+            warn!("Failed to send controller output: {}", e);
         }
     }
 }

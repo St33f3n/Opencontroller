@@ -1,4 +1,4 @@
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
 // Re-export types that need to be public
@@ -46,13 +46,12 @@ pub enum ControllerError {
 }
 
 // Public handle for the complete controller system
-pub struct ControllerHandle {
-    state_receiver: watch::Receiver<ControllerOutput>,
-}
+pub struct ControllerHandle {}
+
 
 impl ControllerHandle {
     // Spawn both collector and processor
-    pub fn spawn(settings: Option<ControllerSettings>) -> Result<Self, ControllerError> {
+    pub fn spawn(settings: Option<ControllerSettings>, sender: mpsc::Sender<ControllerOutput>) -> Result<Self, ControllerError> {
         info!(
             "Initializing Controller system with settings: {:?}",
             settings
@@ -84,20 +83,10 @@ impl ControllerHandle {
 
         // Create and spawn the event processor
         info!("Creating Event Processor");
-        let processor_handle = ProcessorHandle::spawn(event_receiver, Some(processor_settings))?;
+        let processor_handle = ProcessorHandle::spawn(event_receiver,sender, Some(processor_settings))?;
         info!("Event Processor spawned successfully");
 
-        // Get state receiver from processor
-        let state_receiver = processor_handle.subscribe();
-        debug!("Retrieved controller state receiver for UI access");
-
         info!("Controller system initialized successfully");
-        Ok(Self { state_receiver })
-    }
-
-    // Get a receiver for the controller state
-    pub fn subscribe(&self) -> watch::Receiver<ControllerOutput> {
-        debug!("New subscriber to controller state");
-        self.state_receiver.clone()
+        Ok(Self {})
     }
 }

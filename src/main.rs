@@ -30,10 +30,12 @@ async fn main() -> Result<()> {
         joystick_deadzone: 0.05,
     };
 
+    let (controller_output_sender, controller_output_receiver) = mpsc::channel(32);
+
     // Controller starten und Receiver erhalten
-    let controller_handle = ControllerHandle::spawn(Some(controller_settings))
+    let controller_handle = ControllerHandle::spawn(Some(controller_settings), controller_output_sender)
         .map_err(|e| eyre!("Failed to spawn controller: {}", e))?;
-    let controller_rx = controller_handle.subscribe();
+    
 
     // Kanäle für die verschiedenen Event-Typen erstellen
     let (keyboard_tx, keyboard_rx) = mpsc::channel(100);
@@ -42,7 +44,7 @@ async fn main() -> Result<()> {
 
     // Mapping-Engine-Manager erstellen
     let mut mapping_manager =
-        MappingEngineManager::new(controller_rx.clone(), keyboard_tx, elrs_tx, custom_tx);
+        MappingEngineManager::new(, keyboard_tx, elrs_tx, custom_tx);
 
     // Standard-Keyboard-Mapping aktivieren
     let keyboard_config = KeyboardConfig::default_config();

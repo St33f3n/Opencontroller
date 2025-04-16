@@ -15,7 +15,7 @@ pub struct MappingEngineManager {
     active_engines: HashMap<MappingType, MappingEngineHandle>,
 
     /// Receiver für Controller-Events
-    controller_rx: watch::Receiver<ControllerOutput>,
+    controller_rx: mpsc::Receiver<ControllerOutput>,
 
     /// Sender und Receiver für verschiedene Ausgabetypen
     keyboard_tx: mpsc::Sender<MappedEvent>,
@@ -26,7 +26,7 @@ pub struct MappingEngineManager {
 impl MappingEngineManager {
     /// Erstellt einen neuen Mapping-Engine-Manager
     pub fn new(
-        controller_rx: watch::Receiver<ControllerOutput>,
+        controller_rx: mpsc::Receiver<ControllerOutput>,
         keyboard_tx: mpsc::Sender<MappedEvent>,
         elrs_tx: mpsc::Sender<MappedEvent>,
         custom_tx: mpsc::Sender<MappedEvent>,
@@ -85,10 +85,9 @@ impl MappingEngineManager {
             MappingType::Custom => self.custom_tx.clone(),
         };
 
-        // Mapping-Engine erstellen und konfigurieren
-        // Hier create() statt new() verwenden
+        
         let engine = MappingEngine::create(
-            self.controller_rx.clone(),
+            self.controller_rx,
             output_sender,
             mapping_type,
             config_name.clone(),
