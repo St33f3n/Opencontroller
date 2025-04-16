@@ -1,6 +1,6 @@
 pub mod config;
 pub mod controller;
-pub mod mapping; 
+pub mod mapping;
 pub mod ui;
 
 use crate::controller::controller::{
@@ -8,8 +8,8 @@ use crate::controller::controller::{
     JoystickPosition, TriggerValue,
 };
 use crate::mapping::{
-    MappedEvent, MappingEngineManager, keyboard::KeyboardConfig, elrs::ELRSConfig,
-    custom::CustomConfig, MappingType,
+    custom::CustomConfig, elrs::ELRSConfig, keyboard::KeyboardConfig, MappedEvent,
+    MappingEngineManager, MappingType,
 };
 use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, eyre::Report, Result};
@@ -34,41 +34,40 @@ async fn main() -> Result<()> {
     let controller_handle = ControllerHandle::spawn(Some(controller_settings))
         .map_err(|e| eyre!("Failed to spawn controller: {}", e))?;
     let controller_rx = controller_handle.subscribe();
-    
+
     // Kanäle für die verschiedenen Event-Typen erstellen
     let (keyboard_tx, keyboard_rx) = mpsc::channel(100);
     let (elrs_tx, elrs_rx) = mpsc::channel(100);
     let (custom_tx, custom_rx) = mpsc::channel(100);
-    
+
     // Mapping-Engine-Manager erstellen
-    let mut mapping_manager = MappingEngineManager::new(
-        controller_rx.clone(),
-        keyboard_tx,
-        elrs_tx,
-        custom_tx,
-    );
-    
+    let mut mapping_manager =
+        MappingEngineManager::new(controller_rx.clone(), keyboard_tx, elrs_tx, custom_tx);
+
     // Standard-Keyboard-Mapping aktivieren
     let keyboard_config = KeyboardConfig::default_config();
-    if let Err(e) = mapping_manager.activate_mapping(Box::new(keyboard_config)).await {
+    if let Err(e) = mapping_manager
+        .activate_mapping(Box::new(keyboard_config))
+        .await
+    {
         error!("Failed to activate keyboard mapping: {}", e);
     }
-    
+
     // Task für Keyboard-Event-Verarbeitung starten
     let ui_keyboard_task = tokio::spawn(async move {
         process_keyboard_events(keyboard_rx).await;
     });
-    
+
     // Task für ELRS-Event-Verarbeitung starten
     let elrs_task = tokio::spawn(async move {
         process_elrs_events(elrs_rx).await;
     });
-    
+
     // Task für Custom-Event-Verarbeitung starten
     let custom_task = tokio::spawn(async move {
         process_custom_events(custom_rx).await;
     });
-    
+
     // UI starten
     info!("Starting UI with mapping manager");
     let mut native_options = eframe::NativeOptions::default();

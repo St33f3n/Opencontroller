@@ -98,7 +98,7 @@ impl Default for TriggerValue {
 }
 
 // Button event with duration info and state
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ButtonEvent {
     pub button: ButtonType,
     pub duration_ms: f64,
