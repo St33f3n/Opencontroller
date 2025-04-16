@@ -48,7 +48,7 @@ pub enum ButtonState {
 
 // Button type
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum YButtonType {
+pub enum ButtonType {
     A,
     B,
     X,

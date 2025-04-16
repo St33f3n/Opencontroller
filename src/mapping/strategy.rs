@@ -5,6 +5,8 @@ use crate::controller::controller::ControllerOutput;
 use crate::mapping::{MappedEvent, MappingError};
 use std::fmt::{Debug, Display};
 
+use super::keyboard::{Region, Section};
+
 /// Enum für die verschiedenen Typen von Mapping-Strategien
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MappingType {
@@ -84,7 +86,7 @@ pub struct MappingContext {
         crate::controller::controller::ButtonType,
         controller::controller::ButtonEventState,
     >,
-
+    pub last_sections: (Section, Section),
     /// Speichert aggregierte Daten für komplexere Mappings
     pub accumulated_data: std::collections::HashMap<String, Vec<u8>>,
 
