@@ -27,7 +27,17 @@ pub enum Section {
 }
 
 /// Konstante Standard-Regionen für Joystick-Mappings
-pub const REGION_CENTER: Region = Region::new(0.0, 360.0, 0.0, 0.3, Section::Center);
+pub const REGION_CENTER: Region = Region {
+    min_angle: 0.0,
+    max_angle: 360.0,
+    inner_max_angle: 360.0,
+    inner_min_angle: 0.0,
+    min_magnitute: 0.0,
+    max_magnitute: 0.25,
+    inner_min_magnitute: 0.0,
+    inner_max_magnitute: 0.25,
+    section: Section::Center
+};
 pub const REGION_NORTH: Region = Region::new(0.0, 45.0, 0.3, 1.0, Section::North);
 pub const REGION_NORTHEAST: Region = Region::new(45.0, 90.0, 0.3, 1.0, Section::NorthEast);
 pub const REGION_EAST: Region = Region::new(90.0, 135.0, 0.3, 1.0, Section::East);
@@ -37,12 +47,11 @@ pub const REGION_SOUTHWEST: Region = Region::new(225.0, 270.0, 0.3, 1.0, Section
 pub const REGION_WEST: Region = Region::new(270.0, 315.0, 0.3, 1.0, Section::West);
 pub const REGION_NORTHWEST: Region = Region::new(315.0, 360.0, 0.3, 1.0, Section::NorthWest);
 
-pub const ALL_REGIONS: [Region; 9] = standard_regions();
+pub const ALL_REGIONS: [Region; 8] = standard_regions();
 
 /// Liefert alle Standardregionen als Array
-pub const fn standard_regions() -> [Region; 9] {
+pub const fn standard_regions() -> [Region; 8] {
     [
-        REGION_CENTER,
         REGION_NORTH,
         REGION_NORTHEAST,
         REGION_EAST,
@@ -89,15 +98,14 @@ impl Eq for Region {}
 
 impl Region {
     fn region_from_pos(x: f32, y: f32, old_section: Option<Section>) -> Option<Region> {
-        let mut result = None;
         for region in ALL_REGIONS {
-            result = if region.contains(x, y, old_section) {
-                Some(region)
-            } else {
-                None
-            }
+            if region.contains(x, y, old_section) {
+
+                info!("New Region: {:?}", region.section);
+                return Some(region)
+            } 
         }
-        result
+        Some(REGION_CENTER)
     }
 
     fn to_polar(x: f32, y: f32) -> (f32, f32) {
@@ -133,7 +141,7 @@ impl Region {
         let inner_min_angle = angle_min + angle_hysteresis;
         let inner_max_angle = angle_max - angle_hysteresis;
         let inner_min_magnitute = mag_min + mag_hysteresis;
-        let inner_max_magnitute = mag_max - mag_hysteresis;
+        let inner_max_magnitute = mag_max;
 
         Self {
             min_angle: angle_min,
@@ -290,6 +298,7 @@ impl KeyboardStrategy {
         let right_region =
             Region::region_from_pos(right_x, right_y, Some(prev_right_section)).unwrap_or_default();
 
+
         self.context.last_sections = (left_region.section, right_region.section);
 
         let map = self
@@ -316,7 +325,9 @@ impl KeyboardStrategy {
                 modifiers: modifier,
             });
         }
-
+        if !events.is_empty(){
+            info!("Joysticks successfully maped: {:?}", events);
+        }
         events
     }
 
@@ -370,17 +381,11 @@ impl KeyboardStrategy {
                         events.push(Event::Key {
                             key: *key,
                             physical_key: None,
-                            pressed: true,
-                            repeat: true,
-                            modifiers: modifier,
-                        });
-                        events.push(Event::Key {
-                            key: *key,
-                            physical_key: None,
                             pressed: false,
                             repeat: true,
                             modifiers: modifier,
-                        })
+                        });
+
                     }
                     crate::controller::controller::ButtonEventState::Complete => {
                         events.push(Event::Key {
@@ -390,13 +395,7 @@ impl KeyboardStrategy {
                             repeat: false,
                             modifiers: modifier,
                         });
-                        events.push(Event::Key {
-                            key: *key,
-                            physical_key: None,
-                            pressed: false,
-                            repeat: false,
-                            modifiers: modifier,
-                        })
+
                     }
                 };
 
@@ -406,7 +405,9 @@ impl KeyboardStrategy {
                     .insert(button_event.button.clone(), button_event.state);
             }
         }
-
+        if !events.is_empty(){
+            info!("Buttons successfully maped: {:?}", events);
+        }
         events
     }
 }
@@ -414,7 +415,7 @@ impl KeyboardStrategy {
 impl MappingStrategy for KeyboardStrategy {
     fn map(&mut self, input: &ControllerOutput) -> Option<MappedEvent> {
         let mut events = Vec::new();
-
+        
         // Button-Events mappen
         events.extend(self.map_buttons(&input.button_events));
         events.extend(self.map_joystick(input));

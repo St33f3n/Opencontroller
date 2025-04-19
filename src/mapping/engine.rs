@@ -34,7 +34,7 @@ pub enum MappingEngineState {
 #[machine]
 pub struct MappingEngine<S: MappingEngineState> {
     /// Empfänger für Controller-Events
-    input_receiver: watch::Receiver<ControllerOutput>,
+    input_receiver: mpsc::Receiver<ControllerOutput>,
 
     /// Sender für gemappte Events
     output_sender: mpsc::Sender<MappedEvent>,
@@ -73,7 +73,7 @@ impl MappingEngine<Initializing> {
     /// Erstellt eine neue Mapping-Engine im Initialisierungszustand
     /// Verwendet die von Statum generierte new() Methode zur korrekten Initialisierung
     pub fn create(
-        input_receiver: watch::Receiver<ControllerOutput>,
+        input_receiver: mpsc::Receiver<ControllerOutput>,
         output_sender: mpsc::Sender<MappedEvent>,
         engine_type: MappingType,
         name: String,
@@ -157,34 +157,37 @@ impl MappingEngine<Active> {
         };
 
         // Controller-Zustand lesen
-        let controller_state = self.input_receiver.borrow().clone();
+        let controller_state = self.input_receiver.try_recv();
+        
+        if let Ok(controller_output) = controller_state {
+            // Rate-Limiting prüfen, wenn konfiguriert
+            if let Some(limiter) = &mut self.rate_limiter {
+                if !limiter.should_process() {
+                    // Event aufgrund von Rate-Limiting überspringen
+                    return Ok(None);
+                }
+            }
 
-        // Rate-Limiting prüfen, wenn konfiguriert
-        if let Some(limiter) = &mut self.rate_limiter {
-            if !limiter.should_process() {
-                // Event aufgrund von Rate-Limiting überspringen
-                return Ok(None);
+            // Mapping durchführen
+            match strategy.map(&controller_output) {
+                Some(mapped_event) => {
+                    info!("Successfully mapped event to {:?}", mapped_event);
+                    return Ok(Some(mapped_event));
+                }
+                None => {
+                    debug!("No event mapped for this input");
+                    return Ok(None);
+                }
             }
         }
-
-        // Mapping durchführen
-        match strategy.map(&controller_state) {
-            Some(mapped_event) => {
-                debug!("Successfully mapped event to {:?}", mapped_event);
-                Ok(Some(mapped_event))
-            }
-            None => {
-                debug!("No event mapped for this input");
-                Ok(None)
-            }
-        }
+        Ok(None)
     }
 
     /// Sendet ein gemapptes Event über den Ausgabekanal
     pub async fn send_event(&self, event: MappedEvent) -> Result<(), MappingError> {
-        match self.output_sender.send(event).await {
+        match self.output_sender.try_send(event) {
             Ok(_) => {
-                debug!("Event sent successfully");
+                info!("Event sent successfully");
                 Ok(())
             }
             Err(e) => {
@@ -288,18 +291,57 @@ pub struct MappingEngineHandle {
 
 impl MappingEngineHandle {
     /// Erstellt ein neues Handle für eine Mapping-Engine
-    pub fn new(
-        engine_type: MappingType,
-        name: String,
-        task_handle: JoinHandle<Result<(), MappingError>>,
-        shutdown_tx: oneshot::Sender<()>,
-    ) -> Self {
+    pub fn new(engine_type: MappingType, name: String) -> Self {
         Self {
             engine_type,
             name,
-            task_handle: Some(task_handle), // In Some wrappen
-            shutdown_tx: Some(shutdown_tx),
+            task_handle: None,
+            shutdown_tx: None,
         }
+    }
+
+    pub fn start(
+        &mut self,
+        strategy: Box<dyn MappingStrategy>,
+    ) -> Result<(mpsc::Receiver<MappedEvent>, mpsc::Sender<ControllerOutput>), MappingError> {
+        let (controller_state_sender, controller_state_receiver) = mpsc::channel(100);
+        let (mapped_event_sender, mapped_event_receiver) = mpsc::channel(100);
+        let engine_name = self.name.clone();
+        let engine = MappingEngine::create(
+            controller_state_receiver,
+            mapped_event_sender,
+            self.engine_type,
+            engine_name.clone(),
+        )
+        .configure(strategy)?;
+
+        let active_engine = engine.activate();
+
+        // Shutdown-Kanal erstellen
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        self.shutdown_tx = Some(shutdown_tx);
+        let task_handle = tokio::spawn(async move {
+            info!("Spawning running engine: {}", engine_name);
+            match active_engine.run_until_shutdown(shutdown_rx).await {
+                Ok(deactivating_engine) => {
+                    info!("Engine entering deactivating state: {}", engine_name);
+                    let _ = deactivating_engine.shutdown().await;
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("Error running engine: {} - {}", engine_name, e);
+                    Err(e)
+                }
+            }
+        });
+
+        self.task_handle = Some(task_handle);
+
+        info!(
+            "Mapping engine activated: {} ({})",
+            self.name, self.engine_type
+        );
+        Ok((mapped_event_receiver, controller_state_sender))
     }
 
     /// Fährt die Engine herunter und wartet auf Beendigung

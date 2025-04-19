@@ -48,10 +48,12 @@ pub enum ControllerError {
 // Public handle for the complete controller system
 pub struct ControllerHandle {}
 
-
 impl ControllerHandle {
     // Spawn both collector and processor
-    pub fn spawn(settings: Option<ControllerSettings>, sender: mpsc::Sender<ControllerOutput>) -> Result<Self, ControllerError> {
+    pub fn spawn(
+        settings: Option<ControllerSettings>,
+        sender: mpsc::Sender<ControllerOutput>,
+    ) -> Result<Self, ControllerError> {
         info!(
             "Initializing Controller system with settings: {:?}",
             settings
@@ -83,7 +85,8 @@ impl ControllerHandle {
 
         // Create and spawn the event processor
         info!("Creating Event Processor");
-        let processor_handle = ProcessorHandle::spawn(event_receiver,sender, Some(processor_settings))?;
+        let processor_handle =
+            ProcessorHandle::spawn(event_receiver, sender, Some(processor_settings))?;
         info!("Event Processor spawned successfully");
 
         info!("Controller system initialized successfully");

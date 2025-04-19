@@ -7,6 +7,7 @@ use eframe::egui::{
 };
 
 use egui::Modal;
+use tokio::sync::mpsc;
 
 use std::cell::{Cell, RefCell};
 use std::fmt::format;
@@ -239,7 +240,7 @@ impl WiFiNetwork {
 
 pub struct OpencontrollerUI {
     menu_state: MenuState,
-    controler_state: Receiver<controller::controller::ControllerOutput>,
+    event_receiver: mpsc::Receiver<Vec<egui::Event>>,
     main_menu_data: MainMenuData,
     elrs_menu_data: ELRSMenuData,
     mqtt_menu_data: MQTTMenuData,
@@ -251,12 +252,12 @@ pub struct OpencontrollerUI {
 impl OpencontrollerUI {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        controler_state: Receiver<controller::controller::ControllerOutput>,
+        event_receiver: mpsc::Receiver<Vec<egui::Event>>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         OpencontrollerUI {
             menu_state: MenuState::Main,
-            controler_state,
+            event_receiver,
             main_menu_data: MainMenuData::mock_data(),
             elrs_menu_data: ELRSMenuData::mock_data(),
             mqtt_menu_data: MQTTMenuData::mock_data(),
@@ -269,48 +270,15 @@ impl OpencontrollerUI {
 
 impl OpencontrollerUI {
     // In der OpencontrollerUI-Implementierung
-    fn log_controller_state(&self) {
+    fn log_controller_state(&mut self) {
         // Aktuelle Controller-State auslesen
-        let controller_state = self.controler_state.borrow();
+        let controller_events = self.event_receiver.try_recv();
 
-        // Joystick-Positionen ausgeben
-        //info!("Controller State:");
-        /* info!("  Left Stick: x={:.2}, y={:.2}, min_x={:.2}, max_x={:.2}, min_y={:.2}, max_y={:.2}, delta_x={:.2}, delta_y={:.2}",
-           controller_state.left_stick.x, controller_state.left_stick.y,
-           controller_state.left_stick.x_min, controller_state.left_stick.x_max,
-           controller_state.left_stick.y_min, controller_state.left_stick.y_max,
-           controller_state.left_stick.delta_x, controller_state.left_stick.delta_y);
-
-        info!("  Right Stick: x={:.2}, y={:.2}, min_x={:.2}, max_x={:.2}, min_y={:.2}, max_y={:.2}, delta_x={:.2}, delta_y={:.2}",
-           controller_state.right_stick.x, controller_state.right_stick.y,
-           controller_state.right_stick.x_min, controller_state.right_stick.x_max,
-           controller_state.right_stick.y_min, controller_state.right_stick.y_max,
-           controller_state.right_stick.delta_x, controller_state.right_stick.delta_y);
-
-        // Trigger-Werte ausgeben
-        info!(
-            "  Left Trigger: value={:.2}, min={:.2}, max={:.2}, delta={:.2}",
-            controller_state.left_trigger.value,
-            controller_state.left_trigger.min,
-            controller_state.left_trigger.max,
-            controller_state.left_trigger.delta
-        );
-
-        info!(
-            "  Right Trigger: value={:.2}, min={:.2}, max={:.2}, delta={:.2}",
-            controller_state.right_trigger.value,
-            controller_state.right_trigger.min,
-            controller_state.right_trigger.max,
-            controller_state.right_trigger.delta
-        ); */
-
-        // Button-Events ausgeben
-        if !controller_state.button_events.is_empty() {
-            info!("  Button Events:");
-            for (i, event) in controller_state.button_events.iter().enumerate() {
+        if let Ok(events) = controller_events {
+            for element in events {
                 info!(
-                    "    {}: {:?}, duration: {}s",
-                    i, event.button, event.duration_ms
+                    "This event got succesfully transfered into UI:\n{:?}",
+                    element
                 );
             }
         }
@@ -992,11 +960,24 @@ impl OpencontrollerUI {
 }
 
 impl eframe::App for OpencontrollerUI {
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let input = self.event_receiver.try_recv();
+       
+        if let Ok(events) = input {
+            info!("Länge des input Vektors: {}", events.len());
+            raw_input.events.extend_from_slice(events.as_slice());
+        }
+
+        
+    }
+
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.log_controller_state();
+        //self.log_controller_state();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.ctx().request_repaint_after(Duration::from_millis(30));
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
             let width = ui.available_width() - 60.0;
 
             egui::TopBottomPanel::top("top_panel")

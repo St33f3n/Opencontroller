@@ -773,24 +773,23 @@ impl ProcessorHandle {
         info!("Spawning Event Processor with settings: {:?}", settings);
 
         // Processor initialisieren
-        let processor = EventProcessor::create(event_receiver,output_sender.clone(), settings)?;
-        
+        let processor = EventProcessor::create(event_receiver, output_sender.clone(), settings)?;
+
         // Tokio-Task starten
         let task_handle = tokio::spawn(async move {
             if let Err(e) = run_processor_loop(processor).await {
                 error!("Processor task terminated with error: {}", e);
             }
         });
-        
-        Ok(Self { state_sender:output_sender })
+
+        Ok(Self {
+            state_sender: output_sender,
+        })
     }
 }
 
 // Run the processor loop
-async fn run_processor_loop(
-    mut processor: EventProcessor<Waiting>,
-    
-) -> Result<(), ProcessorError>{
+async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<(), ProcessorError> {
     let settings = processor.settings().clone();
     info!(
         "Starting processor loop with {}ms interval",
