@@ -1,9 +1,9 @@
 use chrono::NaiveDateTime;
 use color_eyre::owo_colors::OwoColorize;
 use eframe::egui::{
-    self, containers, style, vec2, widgets, Area, Button, Color32, ComboBox, Context, Frame, Id,
-    Label, Layout, ProgressBar, Rect, RichText, ScrollArea, Sense, Stroke, Style, TextBuffer,
-    TextEdit, Ui, Vec2, Widget, Window,
+    self, containers, style, vec2, widgets, Area, Button, Color32, ComboBox, Context, Event, Frame,
+    Id, Key, Label, Layout, ProgressBar, Rect, RichText, ScrollArea, Sense, Stroke, Style,
+    TextBuffer, TextEdit, Ui, Vec2, Widget, Window,
 };
 
 use egui::Modal;
@@ -960,24 +960,19 @@ impl OpencontrollerUI {
 }
 
 impl eframe::App for OpencontrollerUI {
-
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        let input = self.event_receiver.try_recv();
-       
-        if let Ok(events) = input {
-            info!("Länge des input Vektors: {}", events.len());
-            raw_input.events.extend_from_slice(events.as_slice());
+        if let Ok(events) = self.event_receiver.try_recv() {
+            for event in events {
+                raw_input.events.push(event);
+            }
         }
-
-        
     }
-
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         //self.log_controller_state();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.ctx().request_repaint_after(Duration::from_millis(100));
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
             let width = ui.available_width() - 60.0;
 
             egui::TopBottomPanel::top("top_panel")

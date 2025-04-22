@@ -9,6 +9,12 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use tracing::{debug, error, info, warn};
 
+macro_rules! map_insert {
+    ($map:expr, $regions:expr, $key:expr, $upper:expr, $lower:expr) => {
+        $map.insert($regions, ($key, $upper.to_string(), $lower.to_string()));
+    };
+}
+
 /// Hysterese-Wert für die Region-Erkennung (in Einheitenbereichen, z.B. 0-1.0)
 pub const REGION_HYSTERESIS: f32 = 0.08;
 
@@ -36,7 +42,7 @@ pub const REGION_CENTER: Region = Region {
     max_magnitute: 0.25,
     inner_min_magnitute: 0.0,
     inner_max_magnitute: 0.25,
-    section: Section::Center
+    section: Section::Center,
 };
 pub const REGION_NORTH: Region = Region::new(0.0, 45.0, 0.3, 1.0, Section::North);
 pub const REGION_NORTHEAST: Region = Region::new(45.0, 90.0, 0.3, 1.0, Section::NorthEast);
@@ -100,10 +106,9 @@ impl Region {
     fn region_from_pos(x: f32, y: f32, old_section: Option<Section>) -> Option<Region> {
         for region in ALL_REGIONS {
             if region.contains(x, y, old_section) {
-
                 info!("New Region: {:?}", region.section);
-                return Some(region)
-            } 
+                return Some(region);
+            }
         }
         Some(REGION_CENTER)
     }
@@ -195,7 +200,7 @@ pub struct KeyboardConfig {
     button_mapping: HashMap<ButtonType, Key>,
 
     /// Zuordnung von JoyStick-Left-Regions
-    joystick_mapping: HashMap<(Region, Region), Key>,
+    joystick_mapping: HashMap<(Region, Region), (Key, String, String)>,
 
     /// Zuordnung der Modifier
     modifier_mapping: HashMap<ButtonType, Modifiers>,
@@ -213,7 +218,7 @@ impl KeyboardConfig {
         button_mapping.insert(ButtonType::X, Key::Escape);
         button_mapping.insert(ButtonType::Y, Key::Tab);
         (button_mapping).insert(ButtonType::LeftStick, Key::Semicolon);
-        (button_mapping).insert(ButtonType::RightStick, Key::Period);
+        (button_mapping).insert(ButtonType::RightStick, Key::Backspace);
         button_mapping.insert(ButtonType::DPadUp, Key::ArrowUp);
         button_mapping.insert(ButtonType::DPadRight, Key::ArrowRight);
         button_mapping.insert(ButtonType::DPadLeft, Key::ArrowLeft);
@@ -226,11 +231,193 @@ impl KeyboardConfig {
         modifier_mapping.insert(ButtonType::Start, Modifiers::COMMAND);
 
         let mut joystick_mapping = HashMap::new();
-        joystick_mapping.insert((REGION_NORTH, REGION_CENTER), Key::A);
-        joystick_mapping.insert((REGION_NORTHEAST, REGION_CENTER), Key::B);
-        joystick_mapping.insert((REGION_EAST, REGION_CENTER), Key::C);
-        joystick_mapping.insert((REGION_SOUTHEAST, REGION_CENTER), Key::D);
-        joystick_mapping.insert((REGION_SOUTH, REGION_CENTER), Key::E);
+        // Basis-Alphabet (A-I) mit rechtem Joystick auf CENTER
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTH, REGION_CENTER),
+            Key::A,
+            "A",
+            "a"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTHEAST, REGION_CENTER),
+            Key::B,
+            "B",
+            "b"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_EAST, REGION_CENTER),
+            Key::C,
+            "C",
+            "c"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTHEAST, REGION_CENTER),
+            Key::D,
+            "D",
+            "d"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTH, REGION_CENTER),
+            Key::E,
+            "E",
+            "e"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTHWEST, REGION_CENTER),
+            Key::F,
+            "F",
+            "f"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_WEST, REGION_CENTER),
+            Key::G,
+            "G",
+            "g"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTHWEST, REGION_CENTER),
+            Key::H,
+            "H",
+            "h"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_NORTH),
+            Key::I,
+            "I",
+            "i"
+        );
+
+        // J-R mit rechtem Joystick auf NORTH
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_NORTHEAST),
+            Key::J,
+            "J",
+            "j"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_EAST),
+            Key::K,
+            "K",
+            "k"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_SOUTHEAST),
+            Key::L,
+            "L",
+            "l"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_SOUTH),
+            Key::M,
+            "M",
+            "m"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_SOUTHWEST),
+            Key::N,
+            "N",
+            "n"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_WEST),
+            Key::O,
+            "O",
+            "o"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_CENTER, REGION_NORTHWEST),
+            Key::P,
+            "P",
+            "p"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTH, REGION_NORTH),
+            Key::Q,
+            "Q",
+            "q"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTHEAST, REGION_NORTHEAST),
+            Key::R,
+            "R",
+            "r"
+        );
+
+        // S-Z mit rechtem Joystick auf SOUTH
+        map_insert!(
+            joystick_mapping,
+            (REGION_EAST, REGION_EAST),
+            Key::S,
+            "S",
+            "s"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTHEAST, REGION_SOUTHEAST),
+            Key::T,
+            "T",
+            "t"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTH, REGION_SOUTH),
+            Key::U,
+            "U",
+            "u"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTHWEST, REGION_SOUTHWEST),
+            Key::V,
+            "V",
+            "v"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_WEST, REGION_WEST),
+            Key::W,
+            "W",
+            "w"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTHWEST, REGION_NORTHWEST),
+            Key::X,
+            "X",
+            "x"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_NORTH, REGION_SOUTH),
+            Key::Y,
+            "Y",
+            "y"
+        );
+        map_insert!(
+            joystick_mapping,
+            (REGION_SOUTH, REGION_NORTH),
+            Key::Z,
+            "Z",
+            "z"
+        );
 
         KeyboardConfig {
             button_mapping,
@@ -298,7 +485,6 @@ impl KeyboardStrategy {
         let right_region =
             Region::region_from_pos(right_x, right_y, Some(prev_right_section)).unwrap_or_default();
 
-
         self.context.last_sections = (left_region.section, right_region.section);
 
         let map = self
@@ -309,23 +495,28 @@ impl KeyboardStrategy {
         let modifier = self.map_modifiers(&controller_state.button_events);
 
         let mut events = vec![];
-        if let Some(key) = map {
+        if let Some((key, upper, lower)) = map {
             events.push(Event::Key {
                 key: *key,
-                physical_key: None,
+                physical_key: Some(*key),
                 pressed: true,
                 repeat: false,
                 modifiers: modifier,
             });
             events.push(Event::Key {
                 key: *key,
-                physical_key: None,
+                physical_key: Some(*key),
                 pressed: false,
                 repeat: false,
                 modifiers: modifier,
             });
+            if modifier.shift {
+                events.push(Event::Text(upper.clone()));
+            } else {
+                events.push(Event::Text(lower.clone()));
+            }
         }
-        if !events.is_empty(){
+        if !events.is_empty() {
             info!("Joysticks successfully maped: {:?}", events);
         }
         events
@@ -381,11 +572,22 @@ impl KeyboardStrategy {
                         events.push(Event::Key {
                             key: *key,
                             physical_key: None,
-                            pressed: false,
-                            repeat: true,
+                            pressed: true,
+                            repeat: false,
                             modifiers: modifier,
                         });
-
+                        match key {
+                            Key::Enter => {
+                                events.push(Event::Text("\n".to_string()));
+                            }
+                            Key::Tab => {
+                                events.push(Event::Text("\t".to_string()));
+                            }
+                            Key::Space => {
+                                events.push(Event::Text(" ".to_string()));
+                            }
+                            _ => {}
+                        };
                     }
                     crate::controller::controller::ButtonEventState::Complete => {
                         events.push(Event::Key {
@@ -396,6 +598,18 @@ impl KeyboardStrategy {
                             modifiers: modifier,
                         });
 
+                        match key {
+                            Key::Enter => {
+                                events.push(Event::Text("\n".to_string()));
+                            }
+                            Key::Tab => {
+                                events.push(Event::Text("\t".to_string()));
+                            }
+                            Key::Space => {
+                                events.push(Event::Text(" ".to_string()));
+                            }
+                            _ => {}
+                        };
                     }
                 };
 
@@ -405,7 +619,7 @@ impl KeyboardStrategy {
                     .insert(button_event.button.clone(), button_event.state);
             }
         }
-        if !events.is_empty(){
+        if !events.is_empty() {
             info!("Buttons successfully maped: {:?}", events);
         }
         events
@@ -415,7 +629,7 @@ impl KeyboardStrategy {
 impl MappingStrategy for KeyboardStrategy {
     fn map(&mut self, input: &ControllerOutput) -> Option<MappedEvent> {
         let mut events = Vec::new();
-        
+
         // Button-Events mappen
         events.extend(self.map_buttons(&input.button_events));
         events.extend(self.map_joystick(input));
@@ -443,7 +657,7 @@ impl MappingStrategy for KeyboardStrategy {
     }
 
     fn get_rate_limit(&self) -> Option<u64> {
-        Some(16) // ~60 FPS für UI-Events
+        Some(45) 
     }
 
     fn get_type(&self) -> MappingType {

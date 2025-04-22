@@ -158,7 +158,7 @@ impl MappingEngine<Active> {
 
         // Controller-Zustand lesen
         let controller_state = self.input_receiver.try_recv();
-        
+
         if let Ok(controller_output) = controller_state {
             // Rate-Limiting prüfen, wenn konfiguriert
             if let Some(limiter) = &mut self.rate_limiter {

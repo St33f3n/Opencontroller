@@ -5,12 +5,13 @@ use crate::mapping::{
     engine::{MappingEngine, MappingEngineHandle},
     MappedEvent, MappingConfig, MappingError, MappingStrategy, MappingType,
 };
+use color_eyre::{eyre::eyre, eyre::Report, Result};
 use eframe::egui;
 use std::collections::HashMap;
 use std::sync::mpsc::SendError;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info, warn};
 use tokio::time::Duration;
+use tracing::{debug, error, info, warn};
 
 /// Manager für Mapping-Engines zur Verwaltung mehrerer paralleler Mapping-Strategien
 pub struct MappingEngineManager {
@@ -24,6 +25,8 @@ pub struct MappingEngineManager {
         ),
     >,
 
+    /// Old Events from last cycle
+    old_events: Vec<egui::Event>,
     /// Receiver für Controller-Events
     controller_rx: mpsc::Receiver<ControllerOutput>,
 
@@ -45,6 +48,7 @@ impl MappingEngineManager {
 
         Self {
             active_engines: HashMap::new(),
+            old_events: Vec::new(),
             controller_rx,
             ui_tx,
             elrs_tx,
@@ -103,34 +107,38 @@ impl MappingEngineManager {
         Ok(())
     }
 
-    pub async fn run_mapping(&mut self) {
+    pub async fn run_mapping(&mut self) -> Result<(), Report> {
         info!("Start Mapping");
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
             if let Ok(controller_output) = self.controller_rx.try_recv() {
                 for (mapping_type, (engine, receiver, sender)) in &mut self.active_engines {
-                    
                     let sending_result = sender.try_send(controller_output.clone());
                     if let Err(e) = sending_result {
-                        warn!("{}",e);
+                        warn!("{}", e);
                     }
                     let mapped_events = receiver.try_recv();
                     if let Ok(events) = mapped_events {
                         match events {
                             MappedEvent::KeyboardEvent { key_code } => {
                                 info!("Message to send: {:?}", key_code);
-                                self.ui_tx.try_send(key_code);
+                                if key_code != self.old_events {
+                                    self.old_events = key_code.clone();
+                                    self.ui_tx.try_send(key_code)?;
+                                } else {
+                                    self.old_events = Vec::new();
+                                }
                             }
                             MappedEvent::ELRSData { pre_package } => {
-                                self.elrs_tx.try_send(pre_package);
+                                self.elrs_tx.try_send(pre_package)?;
                             }
                             MappedEvent::CustomEvent { event_type } => {
-                                self.custom_tx.try_send(event_type);
+                                self.custom_tx.try_send(event_type)?;
                             }
                         }
-                    } 
+                    }
                 }
-            } 
+            }
         }
     }
     /// Deaktiviert eine Mapping-Strategie des angegebenen Typs
