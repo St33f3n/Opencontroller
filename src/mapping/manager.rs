@@ -1,15 +1,13 @@
 //! Manager für Mapping-Engines zur Verwaltung verschiedener Mapping-Strategien
 
-use crate::controller::controller::ControllerOutput;
+use crate::controller::controller_handle::ControllerOutput;
 use crate::mapping::{
-    engine::{MappingEngine, MappingEngineHandle},
-    MappedEvent, MappingConfig, MappingError, MappingStrategy, MappingType,
+    engine::MappingEngineHandle, MappedEvent, MappingConfig, MappingError, MappingType,
 };
-use color_eyre::{eyre::eyre, eyre::Report, Result};
+use color_eyre::{eyre::Report, Result};
 use eframe::egui;
 use std::collections::HashMap;
-use std::sync::mpsc::SendError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -112,7 +110,7 @@ impl MappingEngineManager {
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
             if let Ok(controller_output) = self.controller_rx.try_recv() {
-                for (mapping_type, (engine, receiver, sender)) in &mut self.active_engines {
+                for (_mapping_type, (_engine, receiver, sender)) in &mut self.active_engines {
                     let sending_result = sender.try_send(controller_output.clone());
                     if let Err(e) = sending_result {
                         warn!("{}", e);

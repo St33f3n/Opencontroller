@@ -1,11 +1,11 @@
 //! Trait-Definitionen und allgemeine Strategien für das Mapping von Controller-Events.
 
 use crate::controller;
-use crate::controller::controller::ControllerOutput;
+use crate::controller::controller_handle::ControllerOutput;
 use crate::mapping::{MappedEvent, MappingError};
 use std::fmt::{Debug, Display};
 
-use super::keyboard::{Region, Section};
+use super::keyboard::Section;
 
 /// Enum für die verschiedenen Typen von Mapping-Strategien
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,8 +83,8 @@ pub trait MappingStrategy: Send + Sync + 'static {
 pub struct MappingContext {
     /// Speichert den letzten Zustand von Buttons
     pub last_button_states: std::collections::HashMap<
-        crate::controller::controller::ButtonType,
-        controller::controller::ButtonEventState,
+        crate::controller::controller_handle::ButtonType,
+        controller::controller_handle::ButtonEventState,
     >,
     pub last_sections: (Section, Section),
     /// Speichert aggregierte Daten für komplexere Mappings

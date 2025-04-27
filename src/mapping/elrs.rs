@@ -1,6 +1,6 @@
 //! Implementierung der ELRS-Mapping-Strategie für Drohnensteuerung
 
-use crate::controller::controller::{ControllerOutput, JoystickType, TriggerType};
+use crate::controller::controller_handle::{ControllerOutput, JoystickType, TriggerType};
 use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType,
 };
@@ -63,7 +63,8 @@ pub struct ELRSConfig {
     trigger_mapping: HashMap<TriggerType, ELRSChannel>,
 
     /// Buttons zu ELRS AUX-Kanälen
-    button_mapping: HashMap<crate::controller::controller::ButtonType, (ELRSChannel, u16, u16)>,
+    button_mapping:
+        HashMap<crate::controller::controller_handle::ButtonType, (ELRSChannel, u16, u16)>,
 
     /// Invertierungsflag für Kanäle
     invert_channel: HashMap<ELRSChannel, bool>,
@@ -85,7 +86,10 @@ impl ELRSConfig {
     pub fn new(
         joystick_mapping: HashMap<JoystickType, (ELRSChannel, ELRSChannel)>,
         trigger_mapping: HashMap<TriggerType, ELRSChannel>,
-        button_mapping: HashMap<crate::controller::controller::ButtonType, (ELRSChannel, u16, u16)>,
+        button_mapping: HashMap<
+            crate::controller::controller_handle::ButtonType,
+            (ELRSChannel, u16, u16),
+        >,
         invert_channel: HashMap<ELRSChannel, bool>,
         failsafe_values: HashMap<ELRSChannel, u16>,
         name: String,
@@ -129,11 +133,11 @@ impl ELRSConfig {
         // Button-Zuordnung (Button, Kanal, Wert bei Drücken, Wert bei Loslassen)
         let mut button_mapping = HashMap::new();
         button_mapping.insert(
-            crate::controller::controller::ButtonType::A,
+            crate::controller::controller_handle::ButtonType::A,
             (ELRSChannel::Aux3, 2000, 1000), // Arm-Schalter
         );
         button_mapping.insert(
-            crate::controller::controller::ButtonType::B,
+            crate::controller::controller_handle::ButtonType::B,
             (ELRSChannel::Aux4, 2000, 1000), // Flugmodus-Schalter
         );
 
@@ -185,13 +189,13 @@ impl crate::mapping::MappingConfig for ELRSConfig {
         let mut found_channels = Vec::new();
 
         // Joystick-Mappings prüfen
-        for (_, (ch1, ch2)) in &self.joystick_mapping {
+        for (ch1, ch2) in self.joystick_mapping.values() {
             found_channels.push(*ch1);
             found_channels.push(*ch2);
         }
 
         // Trigger-Mappings prüfen
-        for (_, ch) in &self.trigger_mapping {
+        for ch in self.trigger_mapping.values() {
             found_channels.push(*ch);
         }
 
@@ -328,8 +332,10 @@ impl ELRSStrategy {
                 self.config.button_mapping.get(&button_event.button)
             {
                 let value = match button_event.state {
-                    crate::controller::controller::ButtonEventState::Held => *pressed_value,
-                    crate::controller::controller::ButtonEventState::Complete => *released_value,
+                    crate::controller::controller_handle::ButtonEventState::Held => *pressed_value,
+                    crate::controller::controller_handle::ButtonEventState::Complete => {
+                        *released_value
+                    }
                 };
 
                 self.channel_values.insert(*channel, value);

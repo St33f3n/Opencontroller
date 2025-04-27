@@ -1,6 +1,8 @@
 //! Implementierung der Custom-Mapping-Strategie für benutzerdefinierte Protokolle
 
-use crate::controller::controller::{ButtonType, ControllerOutput, JoystickType, TriggerType};
+use crate::controller::controller_handle::{
+    ButtonType, ControllerOutput, JoystickType, TriggerType,
+};
 use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType,
 };
@@ -231,8 +233,8 @@ impl CustomStrategy {
         for button_event in &input.button_events {
             if let Some(handler) = self.config.button_handlers.get(&button_event.button) {
                 let pressed = match button_event.state {
-                    crate::controller::controller::ButtonEventState::Held => true,
-                    crate::controller::controller::ButtonEventState::Complete => false,
+                    crate::controller::controller_handle::ButtonEventState::Held => true,
+                    crate::controller::controller_handle::ButtonEventState::Complete => false,
                 };
 
                 // Handler aufrufen und Ergebnis in Ausgabedaten integrieren

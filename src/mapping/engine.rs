@@ -1,12 +1,12 @@
 //! Implementierung der Mapping-Engine mittels Statum State Machine.
 
-use crate::controller::controller::ControllerOutput;
+use crate::controller::controller_handle::ControllerOutput;
 use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType, RateLimiter,
 };
 use statum::{machine, state};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 

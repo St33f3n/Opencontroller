@@ -1,4 +1,4 @@
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 // Re-export types that need to be public
@@ -80,12 +80,12 @@ impl ControllerHandle {
 
         // Create and spawn the event collector
         info!("Creating Event Collector");
-        let collector_handle = CollectorHandle::spawn(Some(collector_settings), event_sender)?;
+        let _collector_handle = CollectorHandle::spawn(Some(collector_settings), event_sender)?;
         info!("Event Collector spawned successfully");
 
         // Create and spawn the event processor
         info!("Creating Event Processor");
-        let processor_handle =
+        let _processor_handle =
             ProcessorHandle::spawn(event_receiver, sender, Some(processor_settings))?;
         info!("Event Processor spawned successfully");
 

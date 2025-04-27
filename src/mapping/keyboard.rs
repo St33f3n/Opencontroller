@@ -1,6 +1,6 @@
 //! Implementierung der Keyboard-Mapping-Strategie
 
-use crate::controller::controller::{ButtonType, ControllerOutput};
+use crate::controller::controller_handle::{ButtonType, ControllerOutput};
 use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType,
 };
@@ -524,7 +524,7 @@ impl KeyboardStrategy {
 
     fn map_modifiers(
         &self,
-        raw_modifiers: &[crate::controller::controller::ButtonEvent],
+        raw_modifiers: &[crate::controller::controller_handle::ButtonEvent],
     ) -> egui::Modifiers {
         let mut mods: egui::Modifiers = Modifiers::NONE;
         for raw in raw_modifiers {
@@ -538,14 +538,14 @@ impl KeyboardStrategy {
     /// Mappt Button-Events zu Keyboard-Events
     fn map_buttons(
         &mut self,
-        button_events: &[crate::controller::controller::ButtonEvent],
+        button_events: &[crate::controller::controller_handle::ButtonEvent],
     ) -> Vec<egui::Event> {
         let mut events = Vec::new();
-        let mut buttons: Vec<crate::controller::controller::ButtonEvent> = vec![];
+        let mut buttons: Vec<crate::controller::controller_handle::ButtonEvent> = vec![];
         buttons.extend_from_slice(button_events);
         let mut button_events = buttons;
 
-        let raw_modifiers: Vec<crate::controller::controller::ButtonEvent> = button_events
+        let raw_modifiers: Vec<crate::controller::controller_handle::ButtonEvent> = button_events
             .iter()
             .filter(|&x| {
                 x.button.eq(&ButtonType::LeftBumper)
@@ -568,7 +568,7 @@ impl KeyboardStrategy {
             if let Some(key) = self.config.button_mapping.get(&button_event.button) {
                 // Button-Zustand prüfen
                 match button_event.state {
-                    crate::controller::controller::ButtonEventState::Held => {
+                    crate::controller::controller_handle::ButtonEventState::Held => {
                         events.push(Event::Key {
                             key: *key,
                             physical_key: None,
@@ -589,7 +589,7 @@ impl KeyboardStrategy {
                             _ => {}
                         };
                     }
-                    crate::controller::controller::ButtonEventState::Complete => {
+                    crate::controller::controller_handle::ButtonEventState::Complete => {
                         events.push(Event::Key {
                             key: *key,
                             physical_key: None,
@@ -657,7 +657,7 @@ impl MappingStrategy for KeyboardStrategy {
     }
 
     fn get_rate_limit(&self) -> Option<u64> {
-        Some(45) 
+        Some(45)
     }
 
     fn get_type(&self) -> MappingType {

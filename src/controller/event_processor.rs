@@ -1,9 +1,8 @@
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Local};
 use statum::{machine, state};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use tokio::sync::{mpsc, watch};
-use tokio::time::interval;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 // Import shared types from event_collector
@@ -776,7 +775,7 @@ impl ProcessorHandle {
         let processor = EventProcessor::create(event_receiver, output_sender.clone(), settings)?;
 
         // Tokio-Task starten
-        let task_handle = tokio::spawn(async move {
+        let _task_handle = tokio::spawn(async move {
             if let Err(e) = run_processor_loop(processor).await {
                 error!("Processor task terminated with error: {}", e);
             }

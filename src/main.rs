@@ -1,18 +1,13 @@
 pub mod config;
 pub mod controller;
 pub mod mapping;
+pub mod mqtt;
 pub mod ui;
 
-use crate::controller::controller::{
-    ButtonEvent, ButtonState, ControllerHandle, ControllerOutput, ControllerSettings,
-    JoystickPosition, TriggerValue,
-};
-use crate::mapping::{
-    custom::CustomConfig, elrs::ELRSConfig, keyboard::KeyboardConfig, MappedEvent,
-    MappingEngineManager, MappingType,
-};
+use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
+use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
 use crate::ui::OpencontrollerUI;
-use color_eyre::{eyre::eyre, eyre::Report, Result};
+use color_eyre::{eyre::eyre, Result};
 use eframe::egui;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn, Level};
@@ -33,7 +28,7 @@ async fn main() -> Result<()> {
     let (controller_output_sender, controller_output_receiver) = mpsc::channel(1000);
 
     // Controller starten und Receiver erhalten
-    let controller_handle =
+    let _controller_handle =
         ControllerHandle::spawn(Some(controller_settings), controller_output_sender)
             .map_err(|e| eyre!("Failed to spawn controller: {}", e))?;
 
@@ -49,8 +44,8 @@ async fn main() -> Result<()> {
 
     manager.activate_mapping(keyboard_conversion).await?;
 
-    let manager_handl = tokio::spawn(async move {
-        manager.run_mapping().await;
+    let _manager_handl = tokio::spawn(async move {
+        let _res = manager.run_mapping().await;
     });
 
     // UI starten
