@@ -10,15 +10,15 @@ use egui::Modal;
 use tokio::sync::mpsc;
 
 use std::cell::{Cell, RefCell};
-use std::fmt::format;
 use std::path::Path;
 use std::rc::Rc;
-use std::{default, f32, fmt};
-use std::{str::FromStr, time::Duration};
+use std::str::FromStr;
+use std::time::Duration;
+use std::{f32, fmt};
 use tokio::sync::watch::{self, Receiver};
 use tracing::{debug, error, info};
 
-use crate::controller;
+use crate::mqtt::message_manager::MQTTMessage;
 
 enum MenuState {
     Main,
@@ -38,63 +38,17 @@ struct SessionData {
 #[derive(Default)]
 struct ELRSConnection {}
 
-#[derive(Default, Clone, PartialEq)]
-struct MQTTServer {
-    url: String,
-    user: String,
-    pw: String,
-    connceted: bool,
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MQTTServer {
+    pub url: String,
+    pub user: String,
+    pub pw: String,
+    pub connceted: bool,
 }
 
 impl fmt::Display for MQTTServer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}@{}", self.user, self.url)
-    }
-}
-
-#[derive(Default, Clone, PartialEq, Eq)]
-struct MQTTTopic {
-    name: String,
-}
-
-impl MQTTTopic {
-    fn from_string(name: String) -> Self {
-        MQTTTopic { name }
-    }
-}
-
-impl fmt::Display for MQTTTopic {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-#[derive(Default, Clone, PartialEq, Eq)]
-struct MQTTMessage {
-    topic: MQTTTopic,
-    content: String,
-    timestamp: NaiveDateTime,
-}
-
-impl fmt::Display for MQTTMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut slice = self.content.clone();
-        let preview = slice.split_off(10);
-        write!(f, "{} - {}", self.timestamp, preview)
-    }
-}
-
-impl MQTTMessage {
-    fn from_topic(topic: MQTTTopic, content: String) -> Self {
-        MQTTMessage {
-            topic,
-            content,
-            timestamp: chrono::Local::now().naive_local(),
-        }
-    }
-
-    fn render(&self) -> String {
-        format!("{}: {}\n{}", self.timestamp, self.topic, self.content)
     }
 }
 
@@ -126,9 +80,9 @@ impl MainMenuData {
 struct MQTTMenuData {
     active_server: MQTTServer,
     saved_servers: Vec<MQTTServer>,
-    selected_topic: MQTTTopic,
-    subscribed_topics: Vec<MQTTTopic>,
-    available_topics: Vec<MQTTTopic>,
+    selected_topic: String,
+    subscribed_topics: Vec<String>,
+    available_topics: Vec<String>,
     message_history: Vec<MQTTMessage>,
     active_message: MQTTMessage,
     current_message: String,
@@ -150,8 +104,8 @@ impl MQTTMenuData {
             pw: "testpw".to_string(),
             ..Default::default()
         };
-        let test_topic1 = MQTTTopic::from_string("test/topic1".to_string());
-        let test_topic2 = MQTTTopic::from_string("test/topic2".to_string());
+        let test_topic1 = "test/topic1".to_string();
+        let test_topic2 = "test/topic2".to_string();
         let test_msg1 = "Testfiller".to_string();
         let test_msg2 = "Testfiller2".to_string();
         MQTTMenuData {
@@ -464,7 +418,7 @@ impl OpencontrollerUI {
     }
 
     fn topic_selection(&mut self, ui: &mut Ui) {
-        let none_topic = MQTTTopic::default();
+        let none_topic = String::new();
         let selected_topic = &mut self.mqtt_menu_data.selected_topic;
 
         let add_topic = &mut self.mqtt_menu_data.adding_topic;
@@ -496,7 +450,7 @@ impl OpencontrollerUI {
             });
 
         let validate = (
-            !selected_topic.name.is_empty(),
+            !selected_topic.is_empty(),
             subscribed_topics.iter().any(|sub| *sub == *selected_topic),
         );
 
@@ -542,7 +496,7 @@ impl OpencontrollerUI {
                             self.mqtt_menu_data.response_trigger = true;
                             validation = new_topic.is_empty();
                             if !validation {
-                                available_topics.push(MQTTTopic::from_string(new_topic.clone()));
+                                available_topics.push(new_topic.clone());
                             }
                         }
 
