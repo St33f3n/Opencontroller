@@ -4,15 +4,18 @@ use tokio::sync::mpsc;
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct MQTTMessage {
-    topic: String,
-    content: String,
-    timestamp: NaiveDateTime,
+    pub topic: String,
+    pub content: String,
+    pub timestamp: NaiveDateTime,
 }
 
 impl fmt::Display for MQTTMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut slice = self.content.clone();
-        let preview = slice.split_off(10);
+        let preview = if self.content.len() > 10 {
+            &self.content[10..] // Nimm alles ab Position 10
+        } else {
+            &self.content // Verwende den ganzen String
+        };
         write!(f, "{} - {}", self.timestamp, preview)
     }
 }

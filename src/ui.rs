@@ -16,8 +16,9 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::{f32, fmt};
 use tokio::sync::watch::{self, Receiver};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use crate::mqtt::config::MqttConfig;
 use crate::mqtt::message_manager::MQTTMessage;
 
 enum MenuState {
@@ -30,8 +31,7 @@ enum MenuState {
 #[derive(Default)]
 struct SessionData {
     last_session_path: String,
-    mqtt_data: MQTTMenuData,
-    elrs_data: ELRSMenuData,
+
     settings_data: SettingsMenuData,
 }
 
@@ -63,8 +63,7 @@ impl MainMenuData {
     fn mock_data() -> Self {
         let old_test_session = SessionData {
             last_session_path: "".to_string(),
-            mqtt_data: MQTTMenuData::mock_data(),
-            elrs_data: ELRSMenuData::mock_data(),
+
             settings_data: SettingsMenuData::mock_data(),
         };
 
@@ -76,8 +75,10 @@ impl MainMenuData {
     }
 }
 
-#[derive(Default)]
 struct MQTTMenuData {
+    config_sender: watch::Sender<MqttConfig>,
+    received_msg: mpsc::Receiver<MQTTMessage>,
+    msg_sender: mpsc::Sender<MQTTMessage>,
     active_server: MQTTServer,
     saved_servers: Vec<MQTTServer>,
     selected_topic: String,
@@ -97,23 +98,32 @@ struct MQTTMenuData {
 }
 
 impl MQTTMenuData {
-    fn mock_data() -> Self {
+    fn mock_data(
+        config_sender: watch::Sender<MqttConfig>,
+        received_msg: mpsc::Receiver<MQTTMessage>,
+        msg_sender: mpsc::Sender<MQTTMessage>,
+    ) -> Self {
         let server = MQTTServer {
-            url: "mqtt.testserver.com".to_string(),
-            user: "test".to_string(),
-            pw: "testpw".to_string(),
+            url: "192.168.2.151".to_string(),
+            user: "opencontroller".to_string(),
+            pw: "g6PItPPgg@AQGkTTtkMkM".to_string(),
             ..Default::default()
         };
-        let test_topic1 = "test/topic1".to_string();
+        let test_topic1 = "IndoorGarden/Receiving".to_string();
         let test_topic2 = "test/topic2".to_string();
         let test_msg1 = "Testfiller".to_string();
         let test_msg2 = "Testfiller2".to_string();
+        let send_msg =
+            MQTTMessage::from_topic("IndoorGarden/Receiving".to_string(), "TestMSG".to_string());
         MQTTMenuData {
+            config_sender,
+            received_msg,
+            msg_sender,
             active_server: server.clone(),
             saved_servers: vec![server],
             subscribed_topics: Vec::new(),
             available_topics: vec![test_topic1.clone(), test_topic2.clone()],
-            message_history: Vec::new(),
+            message_history: vec![send_msg.clone()],
             current_message: String::new(),
             received_messages: vec![
                 MQTTMessage::from_topic(test_topic1, test_msg1),
@@ -121,7 +131,13 @@ impl MQTTMenuData {
             ],
             adding_server: Cell::new(false),
             adding_topic: Cell::new(false),
-            ..MQTTMenuData::default()
+            selected_topic: String::new(),
+            active_message: send_msg,
+            new_pw: String::new(),
+            new_server_url: String::new(),
+            new_user: String::new(),
+            new_topic: String::new(),
+            response_trigger: false,
         }
     }
 }
@@ -207,6 +223,9 @@ impl OpencontrollerUI {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         event_receiver: mpsc::Receiver<Vec<egui::Event>>,
+        config_sender: watch::Sender<MqttConfig>,
+        received_msg: mpsc::Receiver<MQTTMessage>,
+        msg_sender: mpsc::Sender<MQTTMessage>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         OpencontrollerUI {
@@ -214,7 +233,7 @@ impl OpencontrollerUI {
             event_receiver,
             main_menu_data: MainMenuData::mock_data(),
             elrs_menu_data: ELRSMenuData::mock_data(),
-            mqtt_menu_data: MQTTMenuData::mock_data(),
+            mqtt_menu_data: MQTTMenuData::mock_data(config_sender, received_msg, msg_sender),
             settings_menu_data: SettingsMenuData::mock_data(),
             bat_controller: 0,
             bat_pc: 0,
@@ -402,11 +421,20 @@ impl OpencontrollerUI {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if ui.button("Save").clicked() {
-                                            // Save-Logik
+                                            let msg = MQTTMessage::from_topic(
+                                                "OpenController".to_string(),
+                                                self.mqtt_menu_data.current_message.clone(),
+                                            );
+                                            self.mqtt_menu_data.message_history.push(msg.clone());
                                         }
                                         ui.add_space(2.0);
                                         if ui.button("Send").clicked() {
-                                            // Send-Logik
+                                            let msg = MQTTMessage::from_topic(
+                                                "OpenController".to_string(),
+                                                self.mqtt_menu_data.current_message.clone(),
+                                            );
+                                            self.mqtt_menu_data.message_history.push(msg.clone());
+                                            self.mqtt_menu_data.msg_sender.try_send(msg);
                                         }
                                     },
                                 );
@@ -415,6 +443,12 @@ impl OpencontrollerUI {
                     });
                 });
             });
+        let new_config = MqttConfig {
+            subbed_topics: self.mqtt_menu_data.subscribed_topics.clone(),
+            server: self.mqtt_menu_data.active_server.clone(),
+            poll_frequency: 10,
+        };
+        let _ = self.mqtt_menu_data.config_sender.send(new_config);
     }
 
     fn topic_selection(&mut self, ui: &mut Ui) {
@@ -622,17 +656,30 @@ impl OpencontrollerUI {
         egui::ComboBox::from_id_salt("message history")
             .selected_text("Message History")
             .show_ui(ui, |ui| {
+                info!("Trying to draw msg_history selection");
                 for message in &mut self.mqtt_menu_data.message_history {
-                    ui.selectable_value(
-                        &mut self.mqtt_menu_data.active_message,
-                        message.clone(),
-                        message.to_string(),
-                    );
+                    if ui
+                        .selectable_value(
+                            &mut self.mqtt_menu_data.active_message,
+                            message.clone(),
+                            message.to_string(),
+                        )
+                        .clicked()
+                    {
+                        self.mqtt_menu_data.current_message =
+                            self.mqtt_menu_data.active_message.content.clone();
+                    }
                 }
             });
     }
 
     fn message_log(&mut self, ui: &mut Ui, size: Vec2, border_color: Color32) {
+        let new_incoming_msg = self.mqtt_menu_data.received_msg.try_recv();
+        match new_incoming_msg {
+            Ok(msg) => self.mqtt_menu_data.received_messages.push(msg),
+            Err(e) => {}
+        }
+
         Frame::new()
             .fill(ui.visuals().extreme_bg_color)
             .inner_margin(4)

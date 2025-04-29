@@ -6,12 +6,15 @@ pub mod ui;
 
 use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
 use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
+use crate::mqtt::mqtt_handler::MQTTConnection;
 use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, Result};
 use eframe::egui;
-use tokio::sync::mpsc;
+use mqtt::mqtt_handler::{self, MQTTHandle};
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
+use ui::MQTTServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,6 +40,29 @@ async fn main() -> Result<()> {
     let (elrs_tx, elrs_rx) = mpsc::channel(100);
     let (custom_tx, custom_rx) = mpsc::channel(100);
 
+    let (activate_mqtt_tx, activate_mqtt_rx) = watch::channel(true);
+    let (mqtt_ui_msg_tx, mqtt_ui_msg_rx) = mpsc::channel(100);
+    let (ui_mqtt_msg_tx, ui_mqtt_msg_rx) = mpsc::channel(100);
+
+    let (ui_mqtt_config_tx, ui_mqtt_config_rx) = watch::channel(mqtt::config::MqttConfig {
+        subbed_topics: Vec::new(),
+        server: MQTTServer::default(),
+        poll_frequency: 5,
+    });
+
+    let mqtt_handl = tokio::spawn(async move {
+        let mut mqtt_handle = MQTTHandle { active: true };
+
+        mqtt_handle
+            .start_connection(
+                ui_mqtt_msg_rx,
+                mqtt_ui_msg_tx,
+                ui_mqtt_config_rx,
+                activate_mqtt_rx,
+            )
+            .await;
+    });
+
     let keyboard_conversion = Box::new(KeyboardConfig::default_config());
 
     let mut manager =
@@ -56,7 +82,15 @@ async fn main() -> Result<()> {
     eframe::run_native(
         "OpenController",
         native_options,
-        Box::new(|cc| Ok(Box::new(OpencontrollerUI::new(cc, ui_rx)))),
+        Box::new(|cc| {
+            Ok(Box::new(OpencontrollerUI::new(
+                cc,
+                ui_rx,
+                ui_mqtt_config_tx,
+                mqtt_ui_msg_rx,
+                ui_mqtt_msg_tx,
+            )))
+        }),
     );
 
     Ok(())
