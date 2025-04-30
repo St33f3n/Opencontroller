@@ -5,6 +5,7 @@ use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType,
 };
 use eframe::egui::{self, Event, Key, Modifiers};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use tracing::{debug, error, info, warn};
@@ -18,7 +19,7 @@ macro_rules! map_insert {
 /// Hysterese-Wert für die Region-Erkennung (in Einheitenbereichen, z.B. 0-1.0)
 pub const REGION_HYSTERESIS: f32 = 0.08;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Section {
     North,
     NorthEast,
@@ -70,7 +71,7 @@ pub const fn standard_regions() -> [Region; 8] {
 }
 
 /// Region-Definition für Joystick-Zonen mit Hysterese
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Region {
     pub min_angle: f32,
     pub max_angle: f32,
@@ -194,7 +195,7 @@ impl Region {
 }
 
 /// Konfiguration für Keyboard-Mapping
-#[derive(Debug, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct KeyboardConfig {
     /// Zuordnung von Controller-Buttons zu Keyboard-Keys
     button_mapping: HashMap<ButtonType, Key>,

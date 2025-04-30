@@ -4,11 +4,12 @@ use crate::controller::controller_handle::{ControllerOutput, JoystickType, Trigg
 use crate::mapping::{
     strategy::MappingContext, MappedEvent, MappingError, MappingStrategy, MappingType,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
 /// ELRS Kanaltypen für das Mapping
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum ELRSChannel {
     /// Roll-Kanal (typischerweise Kanal 0)
     Roll = 0,
@@ -54,7 +55,7 @@ impl From<ELRSChannel> for u16 {
 }
 
 /// Konfiguration für ELRS-Mapping
-#[derive(Debug, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct ELRSConfig {
     /// Zuordnung von Joysticks zu ELRS-Kanälen
     joystick_mapping: HashMap<JoystickType, (ELRSChannel, ELRSChannel)>,

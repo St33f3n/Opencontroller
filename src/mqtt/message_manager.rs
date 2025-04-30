@@ -1,8 +1,9 @@
 use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::mpsc;
 
-#[derive(Default, Clone, PartialEq, Eq)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MQTTMessage {
     pub topic: String,
     pub content: String,

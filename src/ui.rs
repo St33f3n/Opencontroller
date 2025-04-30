@@ -5,8 +5,8 @@ use eframe::egui::{
     Id, Key, Label, Layout, ProgressBar, Rect, RichText, ScrollArea, Sense, Stroke, Style,
     TextBuffer, TextEdit, Ui, Vec2, Widget, Window,
 };
-
 use egui::Modal;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use std::cell::{Cell, RefCell};
@@ -38,7 +38,7 @@ struct SessionData {
 #[derive(Default)]
 struct ELRSConnection {}
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct MQTTServer {
     pub url: String,
     pub user: String,

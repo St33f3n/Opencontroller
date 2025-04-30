@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local};
 use gilrs::{Axis, Button, Event, EventType, Gamepad, GamepadId, Gilrs};
+use serde::{Deserialize, Serialize};
 use statum::{machine, state};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -26,14 +27,14 @@ pub enum RawControllerEvent {
 }
 
 // Joystick type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JoystickType {
     Left,
     Right,
 }
 
 // Trigger type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TriggerType {
     Left,
     Right,
@@ -47,7 +48,7 @@ pub enum ButtonState {
 }
 
 // Button type
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ButtonType {
     A,
     B,
@@ -198,7 +199,7 @@ impl EventCollector<Initializing> {
                     gamepad.uuid()
                 );
             }
-
+            //TODO Dynamic change for active gamepad from UI
             // Try to use the first gamepad, or the second if available
             let index = if gamepads.len() > 1 { 1 } else { 0 };
             let (id, gamepad) = &gamepads[index];
