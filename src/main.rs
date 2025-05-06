@@ -4,6 +4,7 @@ pub mod mapping;
 pub mod mqtt;
 pub mod ui;
 
+use crate::config::ConfigClient;
 use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
 use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
 use crate::ui::OpencontrollerUI;
@@ -125,7 +126,7 @@ fn setup_logging_env() {
         .init();
 }
 
-async fn setup_config() -> Result<(Arc<ConfigPortal>, mpsc::Sender<config::ConfigAction>)> {
+async fn setup_config() -> Result<(Arc<ConfigPortal>, ConfigClient)> {
     // Stelle sicher, dass eine Standardkonfiguration existiert
     ConfigPortal::ensure_default_config().await?;
 
@@ -136,8 +137,7 @@ async fn setup_config() -> Result<(Arc<ConfigPortal>, mpsc::Sender<config::Confi
     let _autosave_handle = ConfigPortal::start_autosave_task(config_portal.clone(), 300).await;
 
     // Erstelle den Config-Worker für asynchrone Konfigurationsoperationen
-    let (config_action_sender, _config_worker) =
-        ConfigPortal::create_config_worker(config_portal.clone());
+    let (config_client, _config_worker) = ConfigPortal::create_config_worker(config_portal.clone());
 
-    Ok((config_portal, config_action_sender))
+    Ok((config_portal, config_client))
 }

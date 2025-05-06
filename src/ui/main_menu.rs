@@ -1,7 +1,9 @@
-use crate::config::{Config, ConfigAction, ConfigPortal};
+use crate::config::{Config, ConfigAction, ConfigClient, ConfigPortal};
 use eframe::egui::{self, vec2, Color32, Frame, Label, ScrollArea, Stroke, TextEdit, Ui};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{ops::Deref, str::FromStr};
+use tokio::time;
 use tracing::{debug, error, info, warn};
 
 use super::common::{SessionData, UiColors};
@@ -9,7 +11,7 @@ use super::common::{SessionData, UiColors};
 /// Datenstruktur für das Hauptmenü
 pub struct MainMenuData {
     config_portal: Arc<ConfigPortal>,
-    config_action_sender: tokio::sync::mpsc::Sender<ConfigAction>,
+    config_client: ConfigClient,
     current_session_name: String,
     new_session_name: String,
     previous_sessions: Vec<String>,
@@ -19,14 +21,11 @@ pub struct MainMenuData {
 
 impl MainMenuData {
     /// Erstellt Mock-Daten für die Entwicklung
-    pub fn mock_data(
-        config_portal: Arc<ConfigPortal>,
-        config_action_sender: tokio::sync::mpsc::Sender<ConfigAction>,
-    ) -> Self {
+    pub fn mock_data(config_portal: Arc<ConfigPortal>, config_client: ConfigClient) -> Self {
         let previous_sessions = Vec::new();
         let mut data = Self {
             config_portal,
-            config_action_sender,
+            config_client,
             current_session_name: "TestSession".to_string(),
             new_session_name: String::new(),
             previous_sessions,
@@ -52,6 +51,7 @@ impl MainMenuData {
                 );
                 if ui.button("Save").clicked() {
                     self.saving_session();
+                    std::thread::sleep(Duration::from_millis(200));
                     self.loading_sessions();
                 }
                 if ui.button("Load").clicked() {
@@ -103,49 +103,32 @@ impl MainMenuData {
     }
 
     fn saving_session(&mut self) {
-        // Erstelle einen oneshot-Kanal für die Antwort
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        // Klone Werte für den Closure
         let session_name = self.new_session_name.clone();
-        let sender = self.config_action_sender.clone();
 
-        // Sende die Aktion an den Worker
         if session_name.is_empty() {
             self.session_load_error = Some("Session name cannot be empty".to_string());
-        } else {
-            self.loading_session = true;
+            return;
+        }
 
-            // Verwende tokio::spawn, um den Empfang asynchron zu verarbeiten
-            tokio::spawn(async move {
-                if let Err(e) = sender
-                    .send(ConfigAction::CreateSession {
-                        name: session_name,
-                        response_tx: tx,
-                    })
-                    .await
-                {
-                    error!("Failed to send create session request: {}", e);
-                }
+        let client = self.config_client.clone();
 
-                // Warte auf die Antwort
-                match rx.await {
-                    Ok(Ok(())) => {
+        // Asynchrone Ausführung mit vereinfachtem Zugriff
+        self.config_client.execute_async(move |client| {
+            Box::pin(async move {
+                match client.create_session(session_name).await {
+                    Ok(()) => {
                         info!("Session created successfully");
-                        // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
-                    }
-                    Ok(Err(e)) => {
-                        error!("Failed to create session: {}", e);
-                        // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
+                        // Hier könnte ein Event ausgelöst werden
                     }
                     Err(e) => {
-                        error!("Failed to receive response: {}", e);
-                        // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
+                        error!("Failed to create session: {}", e);
+                        // Hier könnte ein Event ausgelöst werden
                     }
                 }
-            });
-        }
+            })
+        });
     }
+
     fn loading_sessions(&mut self) {
         let sessions = self.config_portal.session.try_read();
         match sessions {
@@ -161,37 +144,21 @@ impl MainMenuData {
     }
 
     fn load_session(&mut self, name: String) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let client = self.config_client.clone();
 
-        let sender = self.config_action_sender.clone();
-
-        // Verwende tokio::spawn, um den Empfang asynchron zu verarbeiten
-        tokio::spawn(async move {
-            if let Err(e) = sender
-                .send(ConfigAction::LoadSession {
-                    name,
-                    response_tx: tx,
-                })
-                .await
-            {
-                error!("Failed to send create session request: {}", e);
-            }
-
-            // Warte auf die Antwort
-            match rx.await {
-                Ok(Ok(())) => {
-                    info!("Session loaded successfully");
-                    // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
+        self.config_client.execute_async(move |client| {
+            Box::pin(async move {
+                match client.load_session(name).await {
+                    Ok(()) => {
+                        info!("Session loaded successfully");
+                        // Hier könnte ein Event ausgelöst werden
+                    }
+                    Err(e) => {
+                        error!("Failed to load session: {}", e);
+                        // Hier könnte ein Event ausgelöst werden
+                    }
                 }
-                Ok(Err(e)) => {
-                    error!("Failed to load session: {}", e);
-                    // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
-                }
-                Err(e) => {
-                    error!("Failed to receive response: {}", e);
-                    // Hier könnte ein Event ausgelöst werden, um die UI zu aktualisieren
-                }
-            }
+            })
         });
     }
 }

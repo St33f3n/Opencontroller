@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use toml;
 use tracing::{debug, error, info, warn};
@@ -471,13 +472,17 @@ impl ConfigPortal {
         self.msg_save.clone()
     }
 
+    pub fn create_client(sender: mpsc::Sender<ConfigAction>) -> ConfigClient {
+        ConfigClient::new(sender)
+    }
+
     // Erstellt eine neue Session
     pub async fn create_session(&self, session_name: String) -> Result<()> {
         info!("Creating new session: {}", session_name);
         let old_session_name_guard = self.session.read().await;
         let old_session_name = old_session_name_guard.session_name.clone();
         let mut config = Config::new(session_name.clone());
-
+        drop(old_session_name_guard);
         // Kopiere die aktuellen Konfigurationen
         {
             let ui_config = self.ui_config.read().await;
@@ -709,15 +714,9 @@ impl ConfigPortal {
 
     pub fn create_config_worker(
         config_portal: Arc<Self>,
-    ) -> (
-        tokio::sync::mpsc::Sender<ConfigAction>,
-        tokio::task::JoinHandle<()>,
-    ) {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<ConfigAction>(32);
-
-        // Clone sender for return
-        let sender = tx.clone();
-
+    ) -> (ConfigClient, tokio::task::JoinHandle<()>) {
+        let (tx, mut rx) = mpsc::channel::<ConfigAction>(32);
+        let client = ConfigClient::new(tx.clone());
         // Spawn worker task
         let handle = tokio::spawn(async move {
             while let Some(action) = rx.recv().await {
@@ -765,7 +764,7 @@ impl ConfigPortal {
             }
         });
 
-        (sender, handle)
+        (client, handle)
     }
 }
 
@@ -794,4 +793,101 @@ pub enum ConfigAction {
         message: MQTTMessage,
         response_tx: tokio::sync::oneshot::Sender<Result<()>>,
     },
+}
+
+#[derive(Clone)]
+pub struct ConfigClient {
+    sender: mpsc::Sender<ConfigAction>,
+}
+
+impl ConfigClient {
+    /// Erstellt einen neuen ConfigClient
+    pub fn new(sender: mpsc::Sender<ConfigAction>) -> Self {
+        Self { sender }
+    }
+
+    /// Erstellt eine neue Session
+    pub async fn create_session(&self, name: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+
+        self.sender
+            .send(ConfigAction::CreateSession {
+                name,
+                response_tx: tx,
+            })
+            .await
+            .map_err(|_| eyre!("Config worker is no longer available"))?;
+
+        rx.await.map_err(|_| eyre!("Failed to receive response"))?
+    }
+
+    /// Lädt eine vorhandene Session
+    pub async fn load_session(&self, name: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+
+        self.sender
+            .send(ConfigAction::LoadSession {
+                name,
+                response_tx: tx,
+            })
+            .await
+            .map_err(|_| eyre!("Config worker is no longer available"))?;
+
+        rx.await.map_err(|_| eyre!("Failed to receive response"))?
+    }
+
+    /// Speichert die aktuelle Session
+    pub async fn save_current_session(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+
+        self.sender
+            .send(ConfigAction::SaveCurrentSession { response_tx: tx })
+            .await
+            .map_err(|_| eyre!("Config worker is no longer available"))?;
+
+        rx.await.map_err(|_| eyre!("Failed to receive response"))?
+    }
+
+    /// Löscht eine Session
+    pub async fn delete_session(&self, name: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+
+        self.sender
+            .send(ConfigAction::DeleteSession {
+                name,
+                response_tx: tx,
+            })
+            .await
+            .map_err(|_| eyre!("Config worker is no longer available"))?;
+
+        rx.await.map_err(|_| eyre!("Failed to receive response"))?
+    }
+
+    /// Speichert eine MQTT-Nachricht
+    pub async fn save_message(&self, message: MQTTMessage) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+
+        self.sender
+            .send(ConfigAction::SaveMessage {
+                message,
+                response_tx: tx,
+            })
+            .await
+            .map_err(|_| eyre!("Config worker is no longer available"))?;
+
+        rx.await.map_err(|_| eyre!("Failed to receive response"))?
+    }
+
+    /// Führt eine Aktion asynchron aus, ohne auf das Ergebnis zu warten
+    pub fn execute_async<F>(&self, future_fn: F)
+    where
+        F: FnOnce(Self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            + Send
+            + 'static,
+    {
+        let client = self.clone();
+        tokio::spawn(async move {
+            future_fn(client).await;
+        });
+    }
 }
