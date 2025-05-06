@@ -11,6 +11,7 @@ use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, Result};
 use config::ConfigPortal;
 use eframe::egui;
+use mqtt::config::MqttConfig;
 use mqtt::mqtt_handler::{self, MQTTHandle};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -48,12 +49,10 @@ async fn main() -> Result<()> {
     let (mqtt_ui_msg_tx, mqtt_ui_msg_rx) = mpsc::channel(100);
     let (ui_mqtt_msg_tx, ui_mqtt_msg_rx) = mpsc::channel(100);
 
-    let (ui_mqtt_config_tx, ui_mqtt_config_rx) = watch::channel(mqtt::config::MqttConfig {
-        subbed_topics: Vec::new(),
-        server: MQTTServer::default(),
-        poll_frequency: 5,
-    });
-
+    let (ui_mqtt_config_tx, ui_mqtt_config_rx) =
+        watch::channel(get_mqtt_conf(config_portal.clone()));
+    let portal = config_portal.clone();
+    let client = config_actions_sender.clone();
     let mqtt_handl = tokio::spawn(async move {
         let mut mqtt_handle = MQTTHandle { active: true };
 
@@ -63,6 +62,8 @@ async fn main() -> Result<()> {
                 mqtt_ui_msg_tx,
                 ui_mqtt_config_rx,
                 activate_mqtt_rx,
+                portal,
+                client,
             )
             .await;
     });
@@ -140,4 +141,42 @@ async fn setup_config() -> Result<(Arc<ConfigPortal>, ConfigClient)> {
     let (config_client, _config_worker) = ConfigPortal::create_config_worker(config_portal.clone());
 
     Ok((config_portal, config_client))
+}
+
+fn get_mqtt_conf(config_portal: Arc<ConfigPortal>) -> crate::mqtt::config::MqttConfig {
+    let mut available_topics = Vec::new();
+
+    match config_portal.connection_config().try_read() {
+        Ok(connection_guard) => {
+            available_topics = connection_guard.mqtt_config.available_topics.clone()
+        }
+        Err(e) => warn!("Unable to read: {}", e),
+    }
+    let mut subbed_topics = Vec::new();
+    match config_portal.connection_config().try_read() {
+        Ok(connection_guard) => subbed_topics = connection_guard.mqtt_config.subbed_topics.clone(),
+        Err(e) => warn!("Unable to read: {}", e),
+    }
+
+    let mut server = MQTTServer::default();
+    match config_portal.connection_config().try_read() {
+        Ok(connection_guard) => server = connection_guard.mqtt_config.server.clone(),
+        Err(e) => warn!("Unable to read: {}", e),
+    }
+
+    let mut available_servers = Vec::new();
+    match config_portal.connection_config().try_read() {
+        Ok(connection_guard) => {
+            available_servers = connection_guard.mqtt_config.available_servers.clone()
+        }
+        Err(e) => warn!("Unable to read: {}", e),
+    }
+
+    MqttConfig {
+        available_topics,
+        subbed_topics,
+        server,
+        available_servers,
+        poll_frequency: 10,
+    }
 }

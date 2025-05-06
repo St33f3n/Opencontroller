@@ -66,7 +66,7 @@ pub struct NetworkConnection {
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct ConnectionConfig {
-    mqtt_config: mqtt::config::MqttConfig,
+    pub mqtt_config: mqtt::config::MqttConfig,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
@@ -76,7 +76,7 @@ pub struct ControllerConfig {
 }
 #[derive(Deserialize, Serialize, Clone, Default, Debug)]
 pub struct SavedMessages {
-    msg: Vec<MQTTMessage>,
+    pub msg: Vec<MQTTMessage>,
 }
 
 pub struct SessionConfig {
@@ -641,7 +641,7 @@ impl ConfigPortal {
         debug!("Saving message: {}", message);
         let mut msg_save = self.msg_save.write().await;
         msg_save.msg.push(message);
-
+        drop(msg_save);
         // Speichere die aktuelle Session
         self.save_current_session().await?;
 

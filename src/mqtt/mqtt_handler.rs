@@ -3,9 +3,11 @@ use std::time::Duration;
 
 use super::message_manager::{MQTTMessage, MsgManager};
 use super::{config, message_manager};
+use crate::config::ConfigClient;
 use chrono::NaiveDateTime;
 use rumqttc::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, Packet, PacketType, QoS};
 use statum::{machine, state};
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 use tracing_subscriber::fmt::time;
@@ -44,6 +46,8 @@ pub struct MQTTConnection<S: MQTTState> {
     event_loop: Option<EventLoop>, // Wird in separatem Task verwendet
     ui_config: watch::Receiver<config::MqttConfig>,
     config: config::MqttConfig,
+    config_portal: Arc<crate::config::ConfigPortal>,
+    config_client: ConfigClient,
     msg_manager: MsgManager,
 }
 
@@ -52,13 +56,21 @@ impl MQTTConnection<Initializing> {
         msg_in: mpsc::Receiver<MQTTMessage>,
         msg_out: mpsc::Sender<MQTTMessage>,
         ui_config: watch::Receiver<config::MqttConfig>,
+        config_portal: Arc<crate::config::ConfigPortal>,
+        config_client: ConfigClient,
     ) -> Self {
         let msg_manager = MsgManager {
             received_msg: msg_out,
             distribution_msg: msg_in,
         };
 
-        let config = ui_config.borrow().clone();
+        let config = config_portal
+            .connection_config()
+            .read()
+            .await
+            .mqtt_config
+            .clone();
+        println!("Created Config for MQTT ========================>");
         let server_comps: Vec<&str> = config.server.url.split(':').collect();
 
         let server_addr = server_comps.first().copied().unwrap_or(" ");
@@ -82,6 +94,8 @@ impl MQTTConnection<Initializing> {
             Some(eventloop),
             ui_config,
             config,
+            config_portal,
+            config_client,
             msg_manager,
         )
     }
@@ -89,10 +103,10 @@ impl MQTTConnection<Initializing> {
     pub async fn configure(self) -> MQTTConnection<Configured> {
         info!(
             "Configuring MQTT connection with {} topics",
-            self.config.subbed_topics.len()
+            self.config.available_topics.len()
         );
 
-        for topic in &self.config.subbed_topics {
+        for topic in &self.config.available_topics {
             match self.client.subscribe(topic, QoS::AtLeastOnce).await {
                 Ok(_) => info!("Successfully subscribed to topic: {}", topic),
                 Err(e) => error!("Failed to subscribe to topic {}: {}", topic, e),
@@ -105,7 +119,16 @@ impl MQTTConnection<Initializing> {
 
 impl MQTTConnection<Configured> {
     pub async fn activate(mut self) -> MQTTConnection<Processing> {
-        let config = self.ui_config.borrow().clone();
+        let mut config = self.ui_config.borrow().clone();
+        println!("Loaded Config from UI ========================>");
+        match self.config_portal.connection_config().try_read() {
+            Ok(connection_guard) => {
+                config = connection_guard.mqtt_config.clone();
+                println!("Config from Loading {:?} ========================>", config);
+            }
+            Err(e) => warn!("Unable to read: {}", e),
+        }
+
         let mut new_topics = Vec::new();
         let mut removed_topics = Vec::new();
         // Server hat sich geändert, Verbindung neu aufbauen
@@ -129,30 +152,44 @@ impl MQTTConnection<Configured> {
             self.client = client;
             self.event_loop = Some(eventloop);
             self.config = config.clone();
+
+            let config_lock = self.config_portal.connection_config();
+            {
+                let mut config_guard = config_lock.write().await;
+                config_guard.mqtt_config = config.clone();
+            }
         }
         // Nur die Topics haben sich geändert
-        if self.config.subbed_topics != config.subbed_topics {
+        if self.config.available_topics != config.available_topics {
             info!("Topic configuration changed, updating subscriptions");
 
             // Neue Topics identifizieren und abonnieren
             new_topics = config
-                .subbed_topics
+                .available_topics
                 .iter()
                 .cloned()
-                .filter(|t| !self.config.subbed_topics.contains(t))
+                .filter(|t| !self.config.available_topics.contains(t))
                 .collect();
 
             // Entfernte Topics identifizieren und abmelden
             removed_topics = self
                 .config
-                .subbed_topics
+                .available_topics
                 .iter()
                 .cloned()
-                .filter(|t| !config.subbed_topics.contains(t))
+                .filter(|t| !config.available_topics.contains(t))
                 .collect();
 
             // Konfiguration aktualisieren
-            self.config = config;
+            self.config = config.clone();
+
+            let config_lock = self.config_portal.connection_config();
+            {
+                println!("Write new Config for MQTT ========================>");
+                let mut config_guard = config_lock.write().await;
+                config_guard.mqtt_config = config.clone();
+                self.config_client.save_current_session().await;
+            }
         }
 
         for topic in new_topics {
@@ -183,10 +220,10 @@ impl MQTTConnection<Processing> {
                     let content = msg.content.clone();
                     info!(
                         "Sending message to {} topics",
-                        self.config.subbed_topics.len()
+                        self.config.available_topics.len()
                     );
 
-                    for topic in &self.config.subbed_topics {
+                    for topic in &self.config.available_topics {
                         match current_client
                             .publish(topic, QoS::AtLeastOnce, false, content.clone())
                             .await
@@ -253,7 +290,7 @@ impl MQTTConnection<Processing> {
                         self.status.last_activity = Some(chrono::Local::now());
                     }
                     Err(e) => {
-                        warn!("Error receiving MQTT event: {:?}", e);
+                        //warn!("Error receiving MQTT event: {:?}", e);
                         self.status
                             .error_messages
                             .push(format!("MQTT event error: {}", e));
@@ -290,11 +327,14 @@ impl MQTTHandle {
         msg_out: mpsc::Sender<MQTTMessage>,
         ui_config: watch::Receiver<config::MqttConfig>,
         activation_state: watch::Receiver<bool>,
+        config_portal: Arc<crate::config::ConfigPortal>,
+        config_client: ConfigClient,
     ) {
         info!("Starting MQTT connection state machine");
 
         // Initialisieren und konfigurieren der Verbindung
-        let connection = MQTTConnection::create(msg_in, msg_out, ui_config).await;
+        let connection =
+            MQTTConnection::create(msg_in, msg_out, ui_config, config_portal, config_client).await;
         let mut connection = connection.configure().await;
 
         // Hauptschleife für Zustandsübergänge - hier ist der kritische Teil

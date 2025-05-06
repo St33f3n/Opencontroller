@@ -1,17 +1,21 @@
+use crate::config::ConfigClient;
+use crate::config::ConfigPortal;
+use crate::mqtt::config::MqttConfig;
+use crate::mqtt::message_manager::MQTTMessage;
 use eframe::egui::{
     self, vec2, Color32, ComboBox, Frame, Id, Label, Modal, ScrollArea, Stroke, TextEdit, Ui, Vec2,
 };
 use std::cell::Cell;
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
-use tracing::{debug, info};
-
-use crate::mqtt::config::MqttConfig;
-use crate::mqtt::message_manager::MQTTMessage;
+use tracing::{debug, error, info, warn};
 
 use super::common::{MQTTServer, UiColors};
 
 /// Datenstruktur für das MQTT-Menü
 pub struct MQTTMenuData {
+    config_portal: Arc<ConfigPortal>,
+    config_client: ConfigClient,
     config_sender: watch::Sender<MqttConfig>,
     received_msg: mpsc::Receiver<MQTTMessage>,
     msg_sender: mpsc::Sender<MQTTMessage>,
@@ -39,38 +43,62 @@ impl MQTTMenuData {
         config_sender: watch::Sender<MqttConfig>,
         received_msg: mpsc::Receiver<MQTTMessage>,
         msg_sender: mpsc::Sender<MQTTMessage>,
+        config_portal: Arc<ConfigPortal>,
+        config_client: ConfigClient,
     ) -> Self {
-        let server = MQTTServer {
-            url: "192.168.2.151".to_string(),
-            user: "opencontroller".to_string(),
-            pw: "g6PItPPgg@AQGkTTtkMkM".to_string(),
-            ..Default::default()
-        };
-        let test_topic1 = "IndoorGarden/Receiving".to_string();
-        let test_topic2 = "test/topic2".to_string();
-        let test_msg1 = "Testfiller".to_string();
-        let test_msg2 = "Testfiller2".to_string();
-        let send_msg =
-            MQTTMessage::from_topic("IndoorGarden/Receiving".to_string(), "TestMSG".to_string());
+        let mut available_topics = Vec::new();
+
+        match config_portal.connection_config().try_read() {
+            Ok(connection_guard) => {
+                available_topics = connection_guard.mqtt_config.available_topics.clone()
+            }
+            Err(e) => warn!("Unable to read: {}", e),
+        }
+        let mut subbed_topics = Vec::new();
+        match config_portal.connection_config().try_read() {
+            Ok(connection_guard) => {
+                subbed_topics = connection_guard.mqtt_config.subbed_topics.clone()
+            }
+            Err(e) => warn!("Unable to read: {}", e),
+        }
+
+        let mut server = MQTTServer::default();
+        match config_portal.connection_config().try_read() {
+            Ok(connection_guard) => server = connection_guard.mqtt_config.server.clone(),
+            Err(e) => warn!("Unable to read: {}", e),
+        }
+
+        let mut available_server = Vec::new();
+        match config_portal.connection_config().try_read() {
+            Ok(connection_guard) => {
+                available_server = connection_guard.mqtt_config.available_servers.clone()
+            }
+            Err(e) => warn!("Unable to read: {}", e),
+        }
+
+        let mut msgs = Vec::new();
+        match config_portal.msg_save().try_read() {
+            Ok(msg_guard) => msgs = msg_guard.msg.clone(),
+            Err(e) => warn!("Unable to read: {}", e),
+        }
 
         MQTTMenuData {
+            config_portal,
+            config_client,
             config_sender,
             received_msg,
             msg_sender,
-            active_server: server.clone(),
-            saved_servers: vec![server],
-            subscribed_topics: Vec::new(),
-            available_topics: vec![test_topic1.clone(), test_topic2.clone()],
-            message_history: vec![send_msg.clone()],
+            active_server: server,
+            saved_servers: available_server,
+            subscribed_topics: subbed_topics,
+            available_topics,
+            message_history: msgs.clone(),
             current_message: String::new(),
-            received_messages: vec![
-                MQTTMessage::from_topic(test_topic1, test_msg1),
-                MQTTMessage::from_topic(test_topic2, test_msg2),
-            ],
+            received_messages: vec![],
             adding_server: Cell::new(false),
             adding_topic: Cell::new(false),
             selected_topic: String::new(),
-            active_message: send_msg,
+            active_message: msgs.first().cloned().unwrap_or(MQTTMessage::default()),
             new_pw: String::new(),
             new_server_url: String::new(),
             new_user: String::new(),
@@ -179,6 +207,7 @@ impl MQTTMenuData {
                                                 self.current_message.clone(),
                                             );
                                             self.message_history.push(msg.clone());
+                                            self.save_msg(msg);
                                         }
                                         ui.add_space(2.0);
                                         if ui.button("Send").clicked() {
@@ -199,8 +228,10 @@ impl MQTTMenuData {
 
         // MQTT Konfiguration aktualisieren
         let new_config = MqttConfig {
+            available_topics: self.available_topics.clone(),
             subbed_topics: self.subscribed_topics.clone(),
             server: self.active_server.clone(),
+            available_servers: self.saved_servers.clone(),
             poll_frequency: 10,
         };
         let _ = self.config_sender.send(new_config);
@@ -477,6 +508,22 @@ impl MQTTMenuData {
                 .hint_text("Nachricht eingeben...")
                 .code_editor()
                 .show(ui);
+        });
+    }
+
+    fn save_msg(&mut self, msg: MQTTMessage) {
+        let client = self.config_client.clone();
+        self.config_client.execute_async(move |client| {
+            Box::pin(async move {
+                match client.save_message(msg).await {
+                    Ok(()) => {
+                        info!("Saved msg");
+                    }
+                    Err(e) => {
+                        error!("Failed to save msg: {}", e);
+                    }
+                }
+            })
         });
     }
 }

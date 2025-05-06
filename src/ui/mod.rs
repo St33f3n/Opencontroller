@@ -48,9 +48,15 @@ impl OpencontrollerUI {
         OpencontrollerUI {
             menu_state: MenuState::Main,
             event_receiver,
-            main_menu_data: MainMenuData::mock_data(config_portal, config_client),
+            main_menu_data: MainMenuData::mock_data(config_portal.clone(), config_client.clone()),
             elrs_menu_data: ELRSMenuData::mock_data(),
-            mqtt_menu_data: MQTTMenuData::mock_data(config_sender, received_msg, msg_sender),
+            mqtt_menu_data: MQTTMenuData::mock_data(
+                config_sender,
+                received_msg,
+                msg_sender,
+                config_portal,
+                config_client,
+            ),
             settings_menu_data: SettingsMenuData::mock_data(),
             bat_controller: 0,
             bat_pc: 0,
