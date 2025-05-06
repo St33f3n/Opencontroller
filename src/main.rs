@@ -6,11 +6,12 @@ pub mod ui;
 
 use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
 use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
-use crate::mqtt::mqtt_handler::MQTTConnection;
 use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, Result};
+use config::ConfigPortal;
 use eframe::egui;
 use mqtt::mqtt_handler::{self, MQTTHandle};
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -27,6 +28,8 @@ async fn main() -> Result<()> {
         button_press_threshold_ms: 30,
         joystick_deadzone: 0.05,
     };
+
+    let (config_portal, config_actions_sender) = setup_config().await?;
 
     let (controller_output_sender, controller_output_receiver) = mpsc::channel(1000);
 
@@ -89,6 +92,8 @@ async fn main() -> Result<()> {
                 ui_mqtt_config_tx,
                 mqtt_ui_msg_rx,
                 ui_mqtt_msg_tx,
+                config_portal,
+                config_actions_sender,
             )))
         }),
     );
@@ -118,4 +123,21 @@ fn setup_logging_env() {
         .with_line_number(true)
         .pretty()
         .init();
+}
+
+async fn setup_config() -> Result<(Arc<ConfigPortal>, mpsc::Sender<config::ConfigAction>)> {
+    // Stelle sicher, dass eine Standardkonfiguration existiert
+    ConfigPortal::ensure_default_config().await?;
+
+    // Erstelle das ConfigPortal
+    let config_portal = Arc::new(ConfigPortal::new().await?);
+
+    // Starte Autosave-Task (alle 5 Minuten)
+    let _autosave_handle = ConfigPortal::start_autosave_task(config_portal.clone(), 300).await;
+
+    // Erstelle den Config-Worker für asynchrone Konfigurationsoperationen
+    let (config_action_sender, _config_worker) =
+        ConfigPortal::create_config_worker(config_portal.clone());
+
+    Ok((config_portal, config_action_sender))
 }

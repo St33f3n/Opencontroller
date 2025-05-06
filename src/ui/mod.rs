@@ -5,10 +5,12 @@ pub mod mqtt_menu;
 pub mod settings_menu;
 
 use eframe::egui::{self, Button, Color32, Context, Event, Layout, Vec2};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::config::{ConfigAction, ConfigPortal};
 use crate::mqtt::config::MqttConfig;
 use crate::mqtt::message_manager::MQTTMessage;
 
@@ -39,12 +41,14 @@ impl OpencontrollerUI {
         config_sender: tokio::sync::watch::Sender<MqttConfig>,
         received_msg: mpsc::Receiver<MQTTMessage>,
         msg_sender: mpsc::Sender<MQTTMessage>,
+        config_portal: Arc<ConfigPortal>,
+        config_action_sender: mpsc::Sender<ConfigAction>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         OpencontrollerUI {
             menu_state: MenuState::Main,
             event_receiver,
-            main_menu_data: MainMenuData::mock_data(),
+            main_menu_data: MainMenuData::mock_data(config_portal, config_action_sender),
             elrs_menu_data: ELRSMenuData::mock_data(),
             mqtt_menu_data: MQTTMenuData::mock_data(config_sender, received_msg, msg_sender),
             settings_menu_data: SettingsMenuData::mock_data(),
