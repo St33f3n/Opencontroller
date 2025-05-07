@@ -1,7 +1,7 @@
-pub mod config;
 pub mod controller;
 pub mod mapping;
 pub mod mqtt;
+pub mod persistence;
 pub mod ui;
 
 use crate::config::ConfigClient;
