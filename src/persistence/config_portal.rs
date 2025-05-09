@@ -9,6 +9,7 @@ use tracing::warn;
 
 use super::{ConnectionConfig, ControllerConfig, SavedMessages, SessionConfig, Theme, UIConfig};
 
+#[derive(Default, Debug)]
 pub struct ConfigPortal {
     pub session: Arc<RwLock<SessionConfig>>,
     pub ui_config: Arc<RwLock<UIConfig>>,
@@ -18,6 +19,22 @@ pub struct ConfigPortal {
 }
 
 impl ConfigPortal {
+    pub fn new(
+        session_config: SessionConfig,
+        ui_config: UIConfig,
+        controller_config: ControllerConfig,
+        connection_config: ConnectionConfig,
+        msg_save: SavedMessages,
+    ) -> Self {
+        Self {
+            session: Arc::new(RwLock::new(session_config)),
+            ui_config: Arc::new(RwLock::new(ui_config)),
+            controller_config: Arc::new(RwLock::new(controller_config)),
+            connection_config: Arc::new(RwLock::new(connection_config)),
+            msg_save: Arc::new(RwLock::new(msg_save)),
+        }
+    }
+
     pub fn write_into_session(&self, session_name: String) {
         loop {
             match self.session.try_write() {

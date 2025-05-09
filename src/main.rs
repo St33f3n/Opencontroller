@@ -4,15 +4,15 @@ pub mod mqtt;
 pub mod persistence;
 pub mod ui;
 
-use crate::config::ConfigClient;
 use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
 use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
+use crate::persistence::config_portal::ConfigPortal;
+use crate::persistence::persistence_worker::SessionAction;
 use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, Result};
-use config::ConfigPortal;
 use eframe::egui;
 use mqtt::config::MqttConfig;
-use mqtt::mqtt_handler::{self, MQTTHandle};
+use mqtt::mqtt_handler::MQTTHandle;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn, Level};
