@@ -7,7 +7,7 @@ pub mod ui;
 use crate::controller::controller_handle::{ControllerHandle, ControllerSettings};
 use crate::mapping::{keyboard::KeyboardConfig, MappingEngineManager};
 use crate::persistence::config_portal::ConfigPortal;
-use crate::persistence::persistence_worker::SessionAction;
+use crate::persistence::persistence_worker::PersistenceManager;
 use crate::ui::OpencontrollerUI;
 use color_eyre::{eyre::eyre, Result};
 use eframe::egui;
@@ -31,7 +31,10 @@ async fn main() -> Result<()> {
         joystick_deadzone: 0.05,
     };
 
-    let (config_portal, config_actions_sender) = setup_config().await?;
+    let persistence_manager = PersistenceManager::new().await;
+    let session_sender = persistence_manager.get_sender();
+
+    let config_portal = persistence_manager.get_cfg_portal().await;
 
     let (controller_output_sender, controller_output_receiver) = mpsc::channel(1000);
 
@@ -48,11 +51,7 @@ async fn main() -> Result<()> {
     let (activate_mqtt_tx, activate_mqtt_rx) = watch::channel(true);
     let (mqtt_ui_msg_tx, mqtt_ui_msg_rx) = mpsc::channel(100);
     let (ui_mqtt_msg_tx, ui_mqtt_msg_rx) = mpsc::channel(100);
-
-    let (ui_mqtt_config_tx, ui_mqtt_config_rx) =
-        watch::channel(get_mqtt_conf(config_portal.clone()));
     let portal = config_portal.clone();
-    let client = config_actions_sender.clone();
     let mqtt_handl = tokio::spawn(async move {
         let mut mqtt_handle = MQTTHandle { active: true };
 
@@ -60,20 +59,24 @@ async fn main() -> Result<()> {
             .start_connection(
                 ui_mqtt_msg_rx,
                 mqtt_ui_msg_tx,
-                ui_mqtt_config_rx,
                 activate_mqtt_rx,
                 portal,
-                client,
+                session_sender,
             )
             .await;
     });
 
-    let keyboard_conversion = Box::new(KeyboardConfig::default_config());
+    let mut manager = MappingEngineManager::new(
+        controller_output_receiver,
+        ui_tx,
+        elrs_tx,
+        custom_tx,
+        portal.clone(),
+    );
 
-    let mut manager =
-        MappingEngineManager::new(controller_output_receiver, ui_tx, elrs_tx, custom_tx);
-
-    manager.activate_mapping(keyboard_conversion).await?;
+    manager
+        .activate_mapping(mapping::MappingType::Keyboard)
+        .await?;
 
     let _manager_handl = tokio::spawn(async move {
         let _res = manager.run_mapping().await;
@@ -91,11 +94,10 @@ async fn main() -> Result<()> {
             Ok(Box::new(OpencontrollerUI::new(
                 cc,
                 ui_rx,
-                ui_mqtt_config_tx,
                 mqtt_ui_msg_rx,
                 ui_mqtt_msg_tx,
                 config_portal,
-                config_actions_sender,
+                session_sender,
             )))
         }),
     );
@@ -125,58 +127,4 @@ fn setup_logging_env() {
         .with_line_number(true)
         .pretty()
         .init();
-}
-
-async fn setup_config() -> Result<(Arc<ConfigPortal>, ConfigClient)> {
-    // Stelle sicher, dass eine Standardkonfiguration existiert
-    ConfigPortal::ensure_default_config().await?;
-
-    // Erstelle das ConfigPortal
-    let config_portal = Arc::new(ConfigPortal::new().await?);
-
-    // Starte Autosave-Task (alle 5 Minuten)
-    let _autosave_handle = ConfigPortal::start_autosave_task(config_portal.clone(), 300).await;
-
-    // Erstelle den Config-Worker für asynchrone Konfigurationsoperationen
-    let (config_client, _config_worker) = ConfigPortal::create_config_worker(config_portal.clone());
-
-    Ok((config_portal, config_client))
-}
-
-fn get_mqtt_conf(config_portal: Arc<ConfigPortal>) -> crate::mqtt::config::MqttConfig {
-    let mut available_topics = Vec::new();
-
-    match config_portal.connection_config().try_read() {
-        Ok(connection_guard) => {
-            available_topics = connection_guard.mqtt_config.available_topics.clone()
-        }
-        Err(e) => warn!("Unable to read: {}", e),
-    }
-    let mut subbed_topics = Vec::new();
-    match config_portal.connection_config().try_read() {
-        Ok(connection_guard) => subbed_topics = connection_guard.mqtt_config.subbed_topics.clone(),
-        Err(e) => warn!("Unable to read: {}", e),
-    }
-
-    let mut server = MQTTServer::default();
-    match config_portal.connection_config().try_read() {
-        Ok(connection_guard) => server = connection_guard.mqtt_config.server.clone(),
-        Err(e) => warn!("Unable to read: {}", e),
-    }
-
-    let mut available_servers = Vec::new();
-    match config_portal.connection_config().try_read() {
-        Ok(connection_guard) => {
-            available_servers = connection_guard.mqtt_config.available_servers.clone()
-        }
-        Err(e) => warn!("Unable to read: {}", e),
-    }
-
-    MqttConfig {
-        available_topics,
-        subbed_topics,
-        server,
-        available_servers,
-        poll_frequency: 10,
-    }
 }

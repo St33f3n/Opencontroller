@@ -1,12 +1,19 @@
 //! Manager für Mapping-Engines zur Verwaltung verschiedener Mapping-Strategien
 
 use crate::controller::controller_handle::ControllerOutput;
+use crate::mapping::custom::CustomConfig;
+use crate::mapping::elrs::ELRSConfig;
+use crate::mapping::keyboard::KeyboardConfig;
+use crate::mapping::MappingStrategy;
 use crate::mapping::{
     engine::MappingEngineHandle, MappedEvent, MappingConfig, MappingError, MappingType,
 };
+use crate::persistence::config_portal::{ConfigPortal, ConfigResult, PortalAction};
 use color_eyre::{eyre::Report, Result};
 use eframe::egui;
+use rumqttc::tokio_rustls::rustls::KeyLog;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -32,6 +39,8 @@ pub struct MappingEngineManager {
     ui_tx: mpsc::Sender<Vec<egui::Event>>,
     elrs_tx: mpsc::Sender<HashMap<u16, u16>>,
     custom_tx: mpsc::Sender<HashMap<String, Vec<u8>>>,
+
+    config_portal: Arc<ConfigPortal>,
 }
 
 impl MappingEngineManager {
@@ -41,6 +50,7 @@ impl MappingEngineManager {
         ui_tx: mpsc::Sender<Vec<egui::Event>>,
         elrs_tx: mpsc::Sender<HashMap<u16, u16>>,
         custom_tx: mpsc::Sender<HashMap<String, Vec<u8>>>,
+        config_portal: Arc<ConfigPortal>,
     ) -> Self {
         info!("Creating new MappingEngineManager");
 
@@ -51,21 +61,50 @@ impl MappingEngineManager {
             ui_tx,
             elrs_tx,
             custom_tx,
+            config_portal,
         }
     }
 
     /// Aktiviert eine Mapping-Strategie mit der angegebenen Konfiguration
     pub async fn activate_mapping(
         &mut self,
-        config: Box<dyn MappingConfig>,
+        mapping_type: MappingType,
     ) -> Result<(), MappingError> {
-        let mapping_type = config.get_type();
-        let config_name = config.get_name();
+        let keyboard_config: KeyboardConfig = if let ConfigResult::KeyboardConfig(config) = self
+            .config_portal
+            .execute_potal_action(PortalAction::GetKeyboardConfig)
+        {
+            if config.button_mapping.is_empty() {
+                KeyboardConfig::default_config()
+            } else {
+                config
+            }
+        } else {
+            KeyboardConfig::default_config()
+        };
 
-        info!("Activating mapping: {} ({})", config_name, mapping_type);
+        let elrs_config: ELRSConfig = if let ConfigResult::ElrsConfig(config) = self
+            .config_portal
+            .execute_potal_action(PortalAction::GetElrsConfig)
+        {
+            if config.joystick_mapping.is_empty() {
+                ELRSConfig::default_config()
+            } else {
+                config
+            }
+        } else {
+            ELRSConfig::default_config()
+        };
 
         // Konfiguration validieren
-        if let Err(e) = config.validate() {
+        if let Err(e) = elrs_config.validate() {
+            error!("Invalid configuration: {}", e);
+            return Err(MappingError::ConfigError(format!(
+                "Invalid configuration: {}",
+                e
+            )));
+        }
+        if let Err(e) = keyboard_config.validate() {
             error!("Invalid configuration: {}", e);
             return Err(MappingError::ConfigError(format!(
                 "Invalid configuration: {}",
@@ -84,23 +123,51 @@ impl MappingEngineManager {
             }
         }
 
-        // Strategie aus Konfiguration erstellen
-        let strategy = config.create_strategy()?;
+        match mapping_type {
+            MappingType::Keyboard => {
+                info!("Activating mapping: Keyboard ({})", mapping_type);
 
-        let mut mapping_engine_handle =
-            MappingEngineHandle::new(mapping_type, mapping_type.to_string());
+                // Strategie aus Konfiguration erstellen
+                let strategy = keyboard_config.create_strategy()?;
 
-        let (mapped_event_receiver, controller_state_sender) =
-            mapping_engine_handle.start(strategy)?;
+                let mut mapping_engine_handle =
+                    MappingEngineHandle::new(mapping_type, mapping_type.to_string());
 
-        self.active_engines.insert(
-            mapping_type,
-            (
-                mapping_engine_handle,
-                mapped_event_receiver,
-                controller_state_sender,
-            ),
-        );
+                let (mapped_event_receiver, controller_state_sender) =
+                    mapping_engine_handle.start(strategy)?;
+
+                self.active_engines.insert(
+                    mapping_type,
+                    (
+                        mapping_engine_handle,
+                        mapped_event_receiver,
+                        controller_state_sender,
+                    ),
+                );
+            }
+            MappingType::ELRS => {
+                info!("Activating mapping: ELRS ({})", mapping_type);
+
+                // Strategie aus Konfiguration erstellen
+                let strategy = elrs_config.create_strategy()?;
+
+                let mut mapping_engine_handle =
+                    MappingEngineHandle::new(mapping_type, mapping_type.to_string());
+
+                let (mapped_event_receiver, controller_state_sender) =
+                    mapping_engine_handle.start(strategy)?;
+
+                self.active_engines.insert(
+                    mapping_type,
+                    (
+                        mapping_engine_handle,
+                        mapped_event_receiver,
+                        controller_state_sender,
+                    ),
+                );
+            }
+            _ => {}
+        }
 
         Ok(())
     }

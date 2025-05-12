@@ -58,7 +58,7 @@ impl From<ELRSChannel> for u16 {
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct ELRSConfig {
     /// Zuordnung von Joysticks zu ELRS-Kanälen
-    joystick_mapping: HashMap<JoystickType, (ELRSChannel, ELRSChannel)>,
+    pub joystick_mapping: HashMap<JoystickType, (ELRSChannel, ELRSChannel)>,
 
     /// Zuordnung von Triggern zu ELRS-Kanälen
     trigger_mapping: HashMap<TriggerType, ELRSChannel>,

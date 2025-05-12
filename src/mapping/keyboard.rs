@@ -198,7 +198,7 @@ impl Region {
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct KeyboardConfig {
     /// Zuordnung von Controller-Buttons zu Keyboard-Keys
-    button_mapping: HashMap<ButtonType, Key>,
+    pub button_mapping: HashMap<ButtonType, Key>,
 
     /// Zuordnung von JoyStick-Left-Regions
     joystick_mapping: HashMap<(Region, Region), (Key, String, String)>,

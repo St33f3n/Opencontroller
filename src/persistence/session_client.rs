@@ -1,13 +1,14 @@
 use super::config_portal::{ConfigPortal, ConfigResult, PortalAction};
 use super::{ConnectionConfig, ControllerConfig, SavedMessages, SessionConfig, UIConfig};
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{eyre::eyre, Report, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{
-    create_dir_all, metadata, read, read_dir, read_to_string, remove_dir, remove_dir_all,
-    try_exists, write,
+    create_dir_all, metadata, read_dir, read_to_string, remove_dir_all, try_exists, write,
 };
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -19,21 +20,47 @@ const CONTROLLER_CONFIG_FILE: &str = "controller_config.toml";
 const MESSAGES_FILE: &str = "saved_messages.toml";
 const SESSION_CONFIG_FILE: &str = "session.toml";
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct SessionClient {
     current_session: String,
     last_session: Option<String>,
+    #[serde(skip)]
     config_portal: Arc<ConfigPortal>,
 }
 
 impl SessionClient {
-    async fn save_current_session(&self) -> Result<()> {
+    pub async fn load_last_session() -> Self {
+        let mut path = Self::get_home_dir();
+        path.push(CONFIG_DIR);
+        path.push(MAIN_CONFIG_FILE);
+
+        let client_string = read_to_string(path).await.unwrap_or_default();
+
+        if client_string.is_empty() {
+            error!("Last Session not found trying to load default config");
+            let default = Self::ensure_default();
+            return default;
+        } else {
+            let client_res = toml::from_str::<SessionClient>(&client_string);
+            let client = client_res.unwrap_or(Self::ensure_default());
+
+            Self::load_session(&client.current_session).await.unwrap()
+        }
+    }
+    pub fn get_portal_ref(&self) -> Arc<ConfigPortal> {
+        self.config_portal.clone()
+    }
+
+    pub async fn save_current_session(&self) -> Result<()> {
         self.save_session(self.current_session.clone()).await
     }
 
-    async fn save_session(&self, name: String) -> Result<()> {
+    pub async fn save_session(&self, name: String) -> Result<()> {
         let mut base_path: PathBuf = Self::get_home_dir();
         base_path.push(CONFIG_DIR);
+
+        let mut main_config: PathBuf = base_path.clone();
+        main_config.push(MAIN_CONFIG_FILE);
         base_path.push(&name);
 
         if !try_exists(&base_path)
@@ -144,7 +171,7 @@ impl SessionClient {
         Ok(())
     }
 
-    async fn load_session(session_name: &str) -> Result<Self> {
+    pub async fn load_session(session_name: &str) -> Result<Self> {
         let mut base_path = Self::get_home_dir();
         base_path.push(CONFIG_DIR);
         base_path.push(session_name);
@@ -281,7 +308,7 @@ impl SessionClient {
         }
     }
 
-    async fn change_session(self, name: &str) -> SessionClient {
+    pub async fn change_session(&mut self, name: &str) -> Result<()> {
         self.save_current_session();
         let new_session = SessionClient::load_session(name)
             .await
@@ -300,17 +327,19 @@ impl SessionClient {
                 new_session
                     .save_current_session()
                     .await
-                    .map_err(|e| eyre!("Failed to save loaded session"));
-                new_session
+                    .map_err(|_e| eyre!("Failed to save loaded session"));
+                *self = new_session;
+                Ok(())
             }
             _ => {
                 error!("Fallback to default configuration as an error while changing_sessions occured. For details refer to logs.");
-                SessionClient::ensure_default()
+                *self = SessionClient::ensure_default();
+                Err(Report::msg("Fallback to default"))
             }
         }
     }
 
-    async fn scan_available_sessions() -> Result<HashMap<String, PathBuf>> {
+    pub async fn scan_available_sessions() -> Result<HashMap<String, PathBuf>> {
         let mut base_path = Self::get_home_dir();
         base_path.push(CONFIG_DIR);
 
@@ -342,7 +371,7 @@ impl SessionClient {
             {
                 if let Some(session_name) = path.file_name().and_then(|n| n.to_str()) {
                     match Self::load_session(session_name).await {
-                        Ok(config) => {
+                        Ok(_config) => {
                             debug!("Found session: {}", session_name);
                             available_sessions.insert(session_name.to_string(), path);
                         }
@@ -356,10 +385,10 @@ impl SessionClient {
 
         Ok(available_sessions)
     }
-    async fn delete_session(&mut self, session_name: &str) -> Result<()> {
+    pub async fn delete_session(&mut self, session_name: &str) -> Result<()> {
         if session_name == self.current_session.as_str() {
             let last_session = self.last_session.clone().unwrap_or("default".to_string());
-            *self = self.clone().change_session(&last_session).await;
+            self.clone().change_session(&last_session).await;
         }
 
         let mut base_path = Self::get_home_dir();
@@ -403,7 +432,10 @@ impl SessionClient {
 
         Ok(())
     }
-    pub async fn start_autosave_task(portal: Arc<Self>, interval_seconds: u64) -> JoinHandle<()> {
+    pub async fn start_autosave_task(
+        portal: Arc<Mutex<SessionClient>>,
+        interval_seconds: u64,
+    ) -> JoinHandle<()> {
         info!(
             "Starting autosave task with interval: {}s",
             interval_seconds
@@ -415,8 +447,7 @@ impl SessionClient {
 
             loop {
                 interval.tick().await;
-
-                if let Err(e) = portal.save_current_session().await {
+                if let Err(e) = portal.lock().await.save_current_session().await {
                     error!("Failed to autosave configuration: {}", e);
                 } else {
                     debug!("Configuration autosaved successfully");

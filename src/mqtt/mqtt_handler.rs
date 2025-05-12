@@ -3,9 +3,14 @@ use std::time::Duration;
 
 use super::message_manager::{MQTTMessage, MsgManager};
 use super::{config, message_manager};
-use crate::config::ConfigClient;
+use crate::mqtt::config::MqttConfig;
+use crate::persistence;
+use crate::persistence::config_portal::{ConfigPortal, ConfigResult, PortalAction};
+use crate::persistence::persistence_worker::SessionAction;
 use chrono::NaiveDateTime;
-use rumqttc::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, Packet, PacketType, QoS};
+use rumqttc::{
+    AsyncClient, Event, EventLoop, Incoming, MqttOptions, MqttState, Packet, PacketType, QoS,
+};
 use statum::{machine, state};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -44,33 +49,35 @@ pub struct MQTTConnection<S: MQTTState> {
     status: MQTTStatus,
     client: AsyncClient,
     event_loop: Option<EventLoop>, // Wird in separatem Task verwendet
-    ui_config: watch::Receiver<config::MqttConfig>,
     config: config::MqttConfig,
-    config_portal: Arc<crate::config::ConfigPortal>,
-    config_client: ConfigClient,
+    config_portal: Arc<ConfigPortal>,
     msg_manager: MsgManager,
+    persistence_sender: mpsc::Sender<SessionAction>,
 }
 
 impl MQTTConnection<Initializing> {
     pub async fn create(
         msg_in: mpsc::Receiver<MQTTMessage>,
         msg_out: mpsc::Sender<MQTTMessage>,
-        ui_config: watch::Receiver<config::MqttConfig>,
-        config_portal: Arc<crate::config::ConfigPortal>,
-        config_client: ConfigClient,
+        config_portal: Arc<ConfigPortal>,
+        persistence_sender: mpsc::Sender<SessionAction>,
     ) -> Self {
         let msg_manager = MsgManager {
             received_msg: msg_out,
             distribution_msg: msg_in,
         };
 
-        let config = config_portal
-            .connection_config()
-            .read()
-            .await
-            .mqtt_config
-            .clone();
+        let config_result = config_portal.execute_potal_action(PortalAction::GetMqttConfig);
+        let config = match config_result {
+            ConfigResult::MqttConfig(config) => config,
+            _ => {
+                warn!("Failed to get MqttConfig form ConfigPortal");
+                MqttConfig::default()
+            }
+        };
+
         println!("Created Config for MQTT ========================>");
+
         let server_comps: Vec<&str> = config.server.url.split(':').collect();
 
         let server_addr = server_comps.first().copied().unwrap_or(" ");
@@ -92,11 +99,10 @@ impl MQTTConnection<Initializing> {
             status,
             client,
             Some(eventloop),
-            ui_config,
             config,
             config_portal,
-            config_client,
             msg_manager,
+            persistence_sender,
         )
     }
 
@@ -106,7 +112,7 @@ impl MQTTConnection<Initializing> {
             self.config.available_topics.len()
         );
 
-        for topic in &self.config.available_topics {
+        for topic in &self.config.subbed_topics {
             match self.client.subscribe(topic, QoS::AtLeastOnce).await {
                 Ok(_) => info!("Successfully subscribed to topic: {}", topic),
                 Err(e) => error!("Failed to subscribe to topic {}: {}", topic, e),
@@ -119,86 +125,79 @@ impl MQTTConnection<Initializing> {
 
 impl MQTTConnection<Configured> {
     pub async fn activate(mut self) -> MQTTConnection<Processing> {
-        let mut config = self.ui_config.borrow().clone();
-        println!("Loaded Config from UI ========================>");
-        match self.config_portal.connection_config().try_read() {
-            Ok(connection_guard) => {
-                config = connection_guard.mqtt_config.clone();
-                println!("Config from Loading {:?} ========================>", config);
+        let mut config = MqttConfig::default();
+        match self
+            .config_portal
+            .execute_potal_action(PortalAction::GetMqttConfig)
+        {
+            ConfigResult::MqttConfig(portal_config) => {
+                config = portal_config.clone();
             }
-            Err(e) => warn!("Unable to read: {}", e),
+            _ => warn!("Unable to get MqttConfig from Portal"),
         }
 
         let mut new_topics = Vec::new();
         let mut removed_topics = Vec::new();
         // Server hat sich geändert, Verbindung neu aufbauen
-        if self.config.server != config.server {
-            info!("Server configuration changed, reconnecting...");
+        if config != MqttConfig::default() {
+            if self.config.server != config.server {
+                info!("Server configuration changed, reconnecting...");
 
-            let server_comps: Vec<&str> = config.server.url.split(':').collect();
-            let server_addr = server_comps.first().copied().unwrap_or(" ");
-            let port = server_comps
-                .get(1)
-                .unwrap_or(&"1883")
-                .parse()
-                .unwrap_or(1883);
+                let server_comps: Vec<&str> = config.server.url.split(':').collect();
+                let server_addr = server_comps.first().copied().unwrap_or(" ");
+                let port = server_comps
+                    .get(1)
+                    .unwrap_or(&"1883")
+                    .parse()
+                    .unwrap_or(1883);
 
-            let mut mqtt_options = MqttOptions::new("OpenController", server_addr, port);
-            mqtt_options
-                .set_credentials(config.server.user.clone(), config.server.pw.clone())
-                .set_keep_alive(Duration::from_secs(5));
+                let mut mqtt_options = MqttOptions::new("OpenController", server_addr, port);
+                mqtt_options
+                    .set_credentials(config.server.user.clone(), config.server.pw.clone())
+                    .set_keep_alive(Duration::from_secs(5));
 
-            let (client, eventloop) = AsyncClient::new(mqtt_options, 10);
-            self.client = client;
-            self.event_loop = Some(eventloop);
-            self.config = config.clone();
+                let (client, eventloop) = AsyncClient::new(mqtt_options, 10);
+                self.client = client;
+                self.event_loop = Some(eventloop);
+            }
+            // Nur die Topics haben sich geändert
+            if self.config.available_topics != config.available_topics {
+                info!("Topic configuration changed, updating subscriptions");
 
-            let config_lock = self.config_portal.connection_config();
-            {
-                let mut config_guard = config_lock.write().await;
-                config_guard.mqtt_config = config.clone();
+                // Neue Topics identifizieren und abonnieren
+                new_topics = config
+                    .available_topics
+                    .iter()
+                    .cloned()
+                    .filter(|t| !self.config.available_topics.contains(t))
+                    .collect();
+
+                // Entfernte Topics identifizieren und abmelden
+                removed_topics = self
+                    .config
+                    .available_topics
+                    .iter()
+                    .cloned()
+                    .filter(|t| !config.available_topics.contains(t))
+                    .collect();
+            }
+
+            self.config = config;
+
+            for topic in new_topics {
+                let _ = self.client.subscribe(topic, QoS::AtLeastOnce).await;
+            }
+
+            for topic in removed_topics {
+                let _ = self.client.unsubscribe(topic).await;
             }
         }
-        // Nur die Topics haben sich geändert
-        if self.config.available_topics != config.available_topics {
-            info!("Topic configuration changed, updating subscriptions");
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<Result<(), color_eyre::Report>>();
+        let _ = self
+            .persistence_sender
+            .try_send(SessionAction::SaveCurrentSession { response_tx: tx });
 
-            // Neue Topics identifizieren und abonnieren
-            new_topics = config
-                .available_topics
-                .iter()
-                .cloned()
-                .filter(|t| !self.config.available_topics.contains(t))
-                .collect();
-
-            // Entfernte Topics identifizieren und abmelden
-            removed_topics = self
-                .config
-                .available_topics
-                .iter()
-                .cloned()
-                .filter(|t| !config.available_topics.contains(t))
-                .collect();
-
-            // Konfiguration aktualisieren
-            self.config = config.clone();
-
-            let config_lock = self.config_portal.connection_config();
-            {
-                println!("Write new Config for MQTT ========================>");
-                let mut config_guard = config_lock.write().await;
-                config_guard.mqtt_config = config.clone();
-                self.config_client.save_current_session().await;
-            }
-        }
-
-        for topic in new_topics {
-            let _ = self.client.subscribe(topic, QoS::AtLeastOnce).await;
-        }
-
-        for topic in removed_topics {
-            let _ = self.client.unsubscribe(topic).await;
-        }
+        let _response = rx.try_recv();
 
         self.transition()
     }
@@ -300,11 +299,8 @@ impl MQTTConnection<Processing> {
 
             // Konfigurationsänderungen prüfen mit der konfigurierten Frequenz
             if last_check.elapsed() >= poll_interval {
-                if self.config != *self.ui_config.borrow() {
-                    info!("Configuration change detected, reconfiguring");
-                    break;
-                }
                 last_check = std::time::Instant::now();
+                break;
             }
 
             // Kurze Pause, um CPU-Last zu reduzieren
@@ -325,16 +321,15 @@ impl MQTTHandle {
         &mut self,
         msg_in: mpsc::Receiver<MQTTMessage>,
         msg_out: mpsc::Sender<MQTTMessage>,
-        ui_config: watch::Receiver<config::MqttConfig>,
         activation_state: watch::Receiver<bool>,
-        config_portal: Arc<crate::config::ConfigPortal>,
-        config_client: ConfigClient,
+        config_portal: Arc<ConfigPortal>,
+        persistence_sender: mpsc::Sender<SessionAction>,
     ) {
         info!("Starting MQTT connection state machine");
 
         // Initialisieren und konfigurieren der Verbindung
         let connection =
-            MQTTConnection::create(msg_in, msg_out, ui_config, config_portal, config_client).await;
+            MQTTConnection::create(msg_in, msg_out, config_portal, persistence_sender).await;
         let mut connection = connection.configure().await;
 
         // Hauptschleife für Zustandsübergänge - hier ist der kritische Teil
