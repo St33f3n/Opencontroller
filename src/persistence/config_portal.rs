@@ -219,6 +219,11 @@ impl ConfigPortal {
                     ConfigResult::MqttMessages(guard.msg.clone())
                 })
             }
+            PortalAction::GetSavedMessages => {
+                try_lock!(@read_lock_retry, self.msg_save.clone(), |guard: &SavedMessages| {
+                    ConfigResult::MqttHistory(guard.clone())
+                })
+            }
             PortalAction::WriteSavedMessages(saved_messages) => {
                 try_lock!(@write_lock_retry, self.msg_save.clone(), |guard: &mut SavedMessages| {
                     *guard = saved_messages;
@@ -278,6 +283,7 @@ pub enum PortalAction {
 
     // SavedMessages-bezogene Aktionen
     GetSavedMessagesMsg,
+    GetSavedMessages,
     WriteSavedMessages(SavedMessages),
     WriteSavedMessagesMsg(Vec<mqtt::message_manager::MQTTMessage>),
 }
@@ -298,6 +304,7 @@ pub enum ConfigResult {
     ConnectionConfig(ConnectionConfig),
     MqttConfig(mqtt::config::MqttConfig),
     MqttMessages(Vec<mqtt::message_manager::MQTTMessage>),
+    MqttHistory(SavedMessages),
     Failed(Error),
 }
 

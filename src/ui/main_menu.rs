@@ -1,39 +1,53 @@
-use crate::config::{Config, ConfigAction, ConfigClient, ConfigPortal};
+use crate::persistence::config_portal::{ConfigPortal, ConfigResult, PortalAction};
+use crate::persistence::persistence_worker::SessionAction;
+use crate::persistence::session_client::SessionClient;
+use crate::persistence::SessionConfig;
 use eframe::egui::{self, vec2, Color32, Frame, Label, ScrollArea, Stroke, TextEdit, Ui};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{ops::Deref, str::FromStr};
-use tokio::time;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use super::common::{SessionData, UiColors};
+use crate::session_action;
 
-/// Datenstruktur für das Hauptmenü
 pub struct MainMenuData {
     config_portal: Arc<ConfigPortal>,
-    config_client: ConfigClient,
+    session_sender: tokio::sync::mpsc::Sender<SessionAction>,
     current_session_name: String,
     new_session_name: String,
-    previous_sessions: Vec<String>,
-    loading_session: bool,
+    previous_session: Option<String>,
     session_load_error: Option<String>,
+    available_sessions: Vec<String>,
 }
 
 impl MainMenuData {
-    /// Erstellt Mock-Daten für die Entwicklung
-    pub fn mock_data(config_portal: Arc<ConfigPortal>, config_client: ConfigClient) -> Self {
-        let previous_sessions = Vec::new();
-        let mut data = Self {
-            config_portal,
-            config_client,
-            current_session_name: "TestSession".to_string(),
-            new_session_name: String::new(),
-            previous_sessions,
-            loading_session: false,
-            session_load_error: None,
+    pub fn new(
+        config_portal: Arc<ConfigPortal>,
+        session_sender: mpsc::Sender<SessionAction>,
+    ) -> Self {
+        let config_res = config_portal.execute_potal_action(PortalAction::GetSession);
+        let config = if let ConfigResult::SessionConfig(session_config) = config_res {
+            session_config
+        } else {
+            SessionConfig::default()
         };
-        data.loading_sessions();
-        data
+
+        Self {
+            config_portal,
+            session_sender,
+            current_session_name: config.session_name.clone(),
+            previous_session: config.last_session.clone(),
+            new_session_name: String::new(),
+            available_sessions: config
+                .available_sessions
+                .keys()
+                .cloned()
+                .into_iter()
+                .collect(),
+            session_load_error: None,
+        }
     }
 
     /// Rendert das Hauptmenü
@@ -50,12 +64,10 @@ impl MainMenuData {
                         .hint_text(self.current_session_name.as_str()),
                 );
                 if ui.button("Save").clicked() {
-                    self.saving_session();
-                    std::thread::sleep(Duration::from_millis(200));
-                    self.loading_sessions();
+                    self.create_session();
                 }
                 if ui.button("Load").clicked() {
-                    self.loading_sessions();
+                    self.list_sessions();
                 }
             });
 
@@ -70,7 +82,7 @@ impl MainMenuData {
 
                     ScrollArea::vertical().show(ui, |ui| {
                         ui.vertical(|ui| {
-                            for session in self.previous_sessions.clone() {
+                            for session in self.available_sessions.clone() {
                                 Frame::new()
                                     .stroke(Stroke::new(1.0, border_color))
                                     .inner_margin(2)
@@ -87,13 +99,13 @@ impl MainMenuData {
                                             .clicked()
                                         {
                                             debug!("Loading Session");
-                                            self.load_session(session.clone());
+                                            self.change_session(session.clone());
                                         }
                                     });
                             }
 
                             // Falls keine Sessions vorhanden sind, einen Platzhalter anzeigen
-                            if self.previous_sessions.is_empty() {
+                            if self.available_sessions.is_empty() {
                                 ui.label("No saved sessions available");
                             }
                         });
@@ -102,7 +114,7 @@ impl MainMenuData {
         });
     }
 
-    fn saving_session(&mut self) {
+    fn create_session(&mut self) {
         let session_name = self.new_session_name.clone();
 
         if session_name.is_empty() {
@@ -110,55 +122,29 @@ impl MainMenuData {
             return;
         }
 
-        let client = self.config_client.clone();
-
-        // Asynchrone Ausführung mit vereinfachtem Zugriff
-        self.config_client.execute_async(move |client| {
-            Box::pin(async move {
-                match client.create_session(session_name).await {
-                    Ok(()) => {
-                        info!("Session created successfully");
-                        // Hier könnte ein Event ausgelöst werden
-                    }
-                    Err(e) => {
-                        error!("Failed to create session: {}", e);
-                        // Hier könnte ein Event ausgelöst werden
-                    }
-                }
-            })
-        });
+        let result = session_action!(@create, self.session_sender, session_name);
+        self.list_sessions();
     }
 
-    fn loading_sessions(&mut self) {
-        let sessions = self.config_portal.session.try_read();
-        match sessions {
-            Ok(session_guard) => {
-                let session = session_guard.deref();
-                self.previous_sessions = session.available_sessions.keys().cloned().collect();
-                self.current_session_name = session.session_name.clone();
-            }
-            Err(e) => {
-                warn!("Fehler beim Lesen der ConfigPortal: {}", e);
-            }
+    fn list_sessions(&mut self) {
+        let result = session_action!(@list, self.session_sender);
+
+        match result {
+            Ok(sessions) => self.available_sessions = sessions.keys().cloned().collect(),
+            Err(e) => warn!("Couldn't load available sessions: {}", e),
         }
     }
 
-    fn load_session(&mut self, name: String) {
-        let client = self.config_client.clone();
+    fn change_session(&mut self, name: String) {
+        self.previous_session = Some(self.current_session_name.clone());
+        self.current_session_name = name.clone();
 
-        self.config_client.execute_async(move |client| {
-            Box::pin(async move {
-                match client.load_session(name).await {
-                    Ok(()) => {
-                        info!("Session loaded successfully");
-                        // Hier könnte ein Event ausgelöst werden
-                    }
-                    Err(e) => {
-                        error!("Failed to load session: {}", e);
-                        // Hier könnte ein Event ausgelöst werden
-                    }
-                }
-            })
-        });
+        let result = session_action!(@load, self.session_sender, name);
+        self.list_sessions();
+    }
+
+    fn delet_session(&mut self, name: String) {
+        let result = session_action!(@delete, self.session_sender, name);
+        self.list_sessions();
     }
 }

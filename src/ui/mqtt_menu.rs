@@ -1,7 +1,9 @@
-use crate::config::ConfigClient;
-use crate::config::ConfigPortal;
+use super::common::{MQTTServer, UiColors};
 use crate::mqtt::config::MqttConfig;
 use crate::mqtt::message_manager::MQTTMessage;
+use crate::persistence::config_portal::{ConfigPortal, ConfigResult, PortalAction};
+use crate::persistence::persistence_worker::SessionAction;
+use crate::session_action;
 use eframe::egui::{
     self, vec2, Color32, ComboBox, Frame, Id, Label, Modal, ScrollArea, Stroke, TextEdit, Ui, Vec2,
 };
@@ -10,13 +12,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
-use super::common::{MQTTServer, UiColors};
-
 /// Datenstruktur für das MQTT-Menü
 pub struct MQTTMenuData {
     config_portal: Arc<ConfigPortal>,
-    config_client: ConfigClient,
-    config_sender: watch::Sender<MqttConfig>,
+    session_sender: mpsc::Sender<SessionAction>,
     received_msg: mpsc::Receiver<MQTTMessage>,
     msg_sender: mpsc::Sender<MQTTMessage>,
     active_server: MQTTServer,
@@ -39,66 +38,48 @@ pub struct MQTTMenuData {
 
 impl MQTTMenuData {
     /// Erstellt Mock-Daten für die Entwicklung
-    pub fn mock_data(
-        config_sender: watch::Sender<MqttConfig>,
+    pub fn new(
         received_msg: mpsc::Receiver<MQTTMessage>,
         msg_sender: mpsc::Sender<MQTTMessage>,
         config_portal: Arc<ConfigPortal>,
-        config_client: ConfigClient,
+        session_sender: mpsc::Sender<SessionAction>,
     ) -> Self {
-        let mut available_topics = Vec::new();
+        let config_res = config_portal.execute_potal_action(PortalAction::GetMqttConfig);
+        let msg_res = config_portal.execute_potal_action(PortalAction::GetSavedMessagesMsg);
 
-        match config_portal.connection_config().try_read() {
-            Ok(connection_guard) => {
-                available_topics = connection_guard.mqtt_config.available_topics.clone()
-            }
-            Err(e) => warn!("Unable to read: {}", e),
-        }
-        let mut subbed_topics = Vec::new();
-        match config_portal.connection_config().try_read() {
-            Ok(connection_guard) => {
-                subbed_topics = connection_guard.mqtt_config.subbed_topics.clone()
-            }
-            Err(e) => warn!("Unable to read: {}", e),
-        }
+        let config = if let ConfigResult::MqttConfig(config) = config_res {
+            config
+        } else {
+            warn!("Could not load MQTT Config");
+            MqttConfig::default()
+        };
 
-        let mut server = MQTTServer::default();
-        match config_portal.connection_config().try_read() {
-            Ok(connection_guard) => server = connection_guard.mqtt_config.server.clone(),
-            Err(e) => warn!("Unable to read: {}", e),
-        }
-
-        let mut available_server = Vec::new();
-        match config_portal.connection_config().try_read() {
-            Ok(connection_guard) => {
-                available_server = connection_guard.mqtt_config.available_servers.clone()
-            }
-            Err(e) => warn!("Unable to read: {}", e),
-        }
-
-        let mut msgs = Vec::new();
-        match config_portal.msg_save().try_read() {
-            Ok(msg_guard) => msgs = msg_guard.msg.clone(),
-            Err(e) => warn!("Unable to read: {}", e),
-        }
+        let msg_history = if let ConfigResult::MqttMessages(msg) = msg_res {
+            msg
+        } else {
+            warn!("Could not load MQTT Message history");
+            Vec::new()
+        };
 
         MQTTMenuData {
             config_portal,
-            config_client,
-            config_sender,
+            session_sender,
             received_msg,
             msg_sender,
-            active_server: server,
-            saved_servers: available_server,
-            subscribed_topics: subbed_topics,
-            available_topics,
-            message_history: msgs.clone(),
+            active_server: config.server.clone(),
+            saved_servers: config.available_servers.clone(),
+            subscribed_topics: config.subbed_topics.clone(),
+            available_topics: config.available_topics.clone(),
+            message_history: msg_history.clone(),
             current_message: String::new(),
             received_messages: vec![],
             adding_server: Cell::new(false),
             adding_topic: Cell::new(false),
             selected_topic: String::new(),
-            active_message: msgs.first().cloned().unwrap_or(MQTTMessage::default()),
+            active_message: msg_history
+                .first()
+                .cloned()
+                .unwrap_or(MQTTMessage::default()),
             new_pw: String::new(),
             new_server_url: String::new(),
             new_user: String::new(),
@@ -109,13 +90,14 @@ impl MQTTMenuData {
 
     /// Rendert das MQTT-Menü
     pub fn render(&mut self, ui: &mut Ui) {
+        self.pre_update_config();
         // Obere Zeile mit MQTT-Überschrift, Server, Topic und Status-Indikator
         ui.horizontal(|ui| {
             ui.heading("MQTT");
             self.server_selection(ui);
             self.topic_selection(ui);
 
-            let status_color = if self.active_server.connceted {
+            let status_color = if self.active_server.connected {
                 UiColors::ACTIVE
             } else {
                 UiColors::INACTIVE
@@ -206,7 +188,6 @@ impl MQTTMenuData {
                                                 "OpenController".to_string(),
                                                 self.current_message.clone(),
                                             );
-                                            self.message_history.push(msg.clone());
                                             self.save_msg(msg);
                                         }
                                         ui.add_space(2.0);
@@ -215,7 +196,7 @@ impl MQTTMenuData {
                                                 "OpenController".to_string(),
                                                 self.current_message.clone(),
                                             );
-                                            self.message_history.push(msg.clone());
+                                            self.save_msg(msg.clone());
                                             let _ = self.msg_sender.try_send(msg);
                                         }
                                     },
@@ -225,8 +206,39 @@ impl MQTTMenuData {
                     });
                 });
             });
+        self.post_update_config();
+    }
 
-        // MQTT Konfiguration aktualisieren
+    fn pre_update_config(&mut self) {
+        let config_res = self
+            .config_portal
+            .execute_potal_action(PortalAction::GetMqttConfig);
+        let msg_res = self
+            .config_portal
+            .execute_potal_action(PortalAction::GetSavedMessagesMsg);
+
+        let config = if let ConfigResult::MqttConfig(config) = config_res {
+            config
+        } else {
+            warn!("Could not load MQTT Config");
+            MqttConfig::default()
+        };
+
+        let msg_history = if let ConfigResult::MqttMessages(msg) = msg_res {
+            msg
+        } else {
+            warn!("Could not load MQTT Message history");
+            Vec::new()
+        };
+
+        self.active_server = config.server;
+        self.available_topics = config.available_topics;
+        self.saved_servers = config.available_servers;
+        self.subscribed_topics = config.subbed_topics;
+        self.message_history = msg_history;
+    }
+
+    fn post_update_config(&self) {
         let new_config = MqttConfig {
             available_topics: self.available_topics.clone(),
             subbed_topics: self.subscribed_topics.clone(),
@@ -234,7 +246,10 @@ impl MQTTMenuData {
             available_servers: self.saved_servers.clone(),
             poll_frequency: 10,
         };
-        let _ = self.config_sender.send(new_config);
+
+        let _res = self
+            .config_portal
+            .execute_potal_action(PortalAction::WriteMqttConfig(new_config));
     }
 
     /// Rendert die Server-Auswahl
@@ -298,7 +313,7 @@ impl MQTTMenuData {
                                         url: new_server_url.to_owned(),
                                         user: new_user.to_owned(),
                                         pw: new_pw.to_owned(),
-                                        connceted: false,
+                                        connected: false,
                                     };
                                     self.response_trigger = false;
                                     add_server.set(false);
@@ -441,7 +456,6 @@ impl MQTTMenuData {
         ComboBox::from_id_salt("message history")
             .selected_text("Message History")
             .show_ui(ui, |ui| {
-                info!("Trying to draw msg_history selection");
                 for message in &mut self.message_history {
                     if ui
                         .selectable_value(
@@ -512,18 +526,14 @@ impl MQTTMenuData {
     }
 
     fn save_msg(&mut self, msg: MQTTMessage) {
-        let client = self.config_client.clone();
-        self.config_client.execute_async(move |client| {
-            Box::pin(async move {
-                match client.save_message(msg).await {
-                    Ok(()) => {
-                        info!("Saved msg");
-                    }
-                    Err(e) => {
-                        error!("Failed to save msg: {}", e);
-                    }
-                }
-            })
-        });
+        self.message_history.push(msg.clone());
+
+        let _res = self
+            .config_portal
+            .execute_potal_action(PortalAction::WriteSavedMessagesMsg(
+                self.message_history.clone(),
+            ));
+
+        let _ = session_action!(@save, self.session_sender);
     }
 }

@@ -17,7 +17,7 @@ pub struct MQTTServer {
     pub url: String,
     pub user: String,
     pub pw: String,
-    pub connceted: bool,
+    pub connected: bool,
 }
 
 impl fmt::Display for MQTTServer {

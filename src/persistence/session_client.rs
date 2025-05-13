@@ -119,12 +119,12 @@ impl SessionClient {
 
         let saved_msg = self
             .config_portal
-            .execute_potal_action(PortalAction::GetSavedMessagesMsg);
-        let saved_msg = if let ConfigResult::MqttMessages(result) = saved_msg {
+            .execute_potal_action(PortalAction::GetSavedMessages);
+        let saved_msg = if let ConfigResult::MqttHistory(result) = saved_msg {
             result
         } else {
             warn!("Could not retriev valid UiConfig");
-            Vec::new()
+            SavedMessages::default()
         };
 
         let ui_content = toml::to_string_pretty(&ui_config)
@@ -155,6 +155,12 @@ impl SessionClient {
             .await
             .map_err(|e| eyre!("Failed to write messages file: {}", e))?;
 
+        let client_content = toml::to_string_pretty(&self)
+            .map_err(|e| eyre!("Failed to parse main config file: {}", e))?;
+        write(&main_config, client_content)
+            .await
+            .map_err(|e| eyre!("Failed to write main config file: {}", e))?;
+
         let mut current_sessions = match self
             .config_portal
             .execute_potal_action(PortalAction::GetAvailableSessions)
@@ -164,9 +170,25 @@ impl SessionClient {
         };
 
         current_sessions.insert(name.to_string(), base_path.clone());
-
         self.config_portal
             .execute_potal_action(PortalAction::WriteAvailableSessions(current_sessions));
+
+        let session = if let ConfigResult::SessionConfig(session) = self
+            .config_portal
+            .execute_potal_action(PortalAction::GetSession)
+        {
+            session
+        } else {
+            warn!("Could not read current Session from Configportal");
+            SessionConfig::default()
+        };
+
+        let session_content = toml::to_string_pretty(&session)
+            .map_err(|e| eyre!("Failed to parse session config file: {}", e))?;
+        write(&session_path, session_content)
+            .await
+            .map_err(|e| eyre!("Failed to write session config file: {}", e))?;
+
         info!("Session {} saved successfully", name);
         Ok(())
     }
@@ -200,15 +222,16 @@ impl SessionClient {
 
         let session_config = if try_exists(&session_path)
             .await
-            .map_err(|e| eyre!("Failed to check if UI config file exists: {}", e))?
+            .map_err(|e| eyre!("Failed to check if Session config file exists: {}", e))?
         {
             let content = read_to_string(&session_path)
                 .await
-                .map_err(|e| eyre!("Failed to read UI config file: {}", e))?;
-            toml::from_str(&content).map_err(|e| eyre!("Failed to parse UI config file: {}", e))?
+                .map_err(|e| eyre!("Failed to read Session config file: {}", e))?;
+            toml::from_str(&content)
+                .map_err(|e| eyre!("Failed to parse Session config file: {}", e))?
         } else {
             warn!(
-                "UI config file does not exist for session {}, using default",
+                "Session config file does not exist for session {}, using default",
                 session_name
             );
             SessionConfig::default()
@@ -309,7 +332,7 @@ impl SessionClient {
     }
 
     pub async fn change_session(&mut self, name: &str) -> Result<()> {
-        self.save_current_session();
+        self.save_current_session().await;
         let new_session = SessionClient::load_session(name)
             .await
             .unwrap_or(SessionClient::ensure_default());
@@ -427,7 +450,7 @@ impl SessionClient {
                 .map_err(|e| eyre!("Failed to create config directory: {}", e))?;
 
             let config = SessionClient::ensure_default();
-            config.save_current_session();
+            config.save_current_session().await;
         }
 
         Ok(())

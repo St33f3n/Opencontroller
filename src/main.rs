@@ -52,6 +52,9 @@ async fn main() -> Result<()> {
     let (mqtt_ui_msg_tx, mqtt_ui_msg_rx) = mpsc::channel(100);
     let (ui_mqtt_msg_tx, ui_mqtt_msg_rx) = mpsc::channel(100);
     let portal = config_portal.clone();
+    let portal_cpy = portal.clone();
+    let session_sender_cpy = session_sender.clone();
+
     let mqtt_handl = tokio::spawn(async move {
         let mut mqtt_handle = MQTTHandle { active: true };
 
@@ -60,8 +63,8 @@ async fn main() -> Result<()> {
                 ui_mqtt_msg_rx,
                 mqtt_ui_msg_tx,
                 activate_mqtt_rx,
-                portal,
-                session_sender,
+                portal_cpy,
+                session_sender_cpy,
             )
             .await;
     });

@@ -10,9 +10,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{self, ConfigAction, ConfigPortal};
 use crate::mqtt::config::MqttConfig;
 use crate::mqtt::message_manager::MQTTMessage;
+use crate::persistence::config_portal::{ConfigPortal, ConfigResult};
+use crate::persistence::persistence_worker::SessionAction;
+use crate::persistence::session_client::SessionClient;
 
 use self::common::MenuState;
 use self::elrs_menu::ELRSMenuData;
@@ -32,31 +34,33 @@ pub struct OpencontrollerUI {
     settings_menu_data: SettingsMenuData,
     bat_controller: usize,
     bat_pc: usize,
+    config_portal: Arc<ConfigPortal>,
+    session_sender: mpsc::Sender<SessionAction>,
 }
 
 impl OpencontrollerUI {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         event_receiver: mpsc::Receiver<Vec<egui::Event>>,
-        config_sender: tokio::sync::watch::Sender<MqttConfig>,
         received_msg: mpsc::Receiver<MQTTMessage>,
         msg_sender: mpsc::Sender<MQTTMessage>,
         config_portal: Arc<ConfigPortal>,
-        config_client: config::ConfigClient,
+        session_sender: mpsc::Sender<SessionAction>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         OpencontrollerUI {
             menu_state: MenuState::Main,
             event_receiver,
-            main_menu_data: MainMenuData::mock_data(config_portal.clone(), config_client.clone()),
+            main_menu_data: MainMenuData::new(config_portal.clone(), session_sender.clone()),
             elrs_menu_data: ELRSMenuData::mock_data(),
-            mqtt_menu_data: MQTTMenuData::mock_data(
-                config_sender,
+            mqtt_menu_data: MQTTMenuData::new(
                 received_msg,
                 msg_sender,
-                config_portal,
-                config_client,
+                config_portal.clone(),
+                session_sender.clone(),
             ),
+            config_portal: config_portal.clone(),
+            session_sender: session_sender.clone(),
             settings_menu_data: SettingsMenuData::mock_data(),
             bat_controller: 0,
             bat_pc: 0,

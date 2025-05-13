@@ -14,8 +14,8 @@ use tracing::{debug, error, info, warn};
 
 macro_rules! handle_action {
     ($action:expr, $response_tx:expr) => {
-        if let Err(_) = $response_tx.send($action.await) {
-            error!("Failed to send response");
+        if let Err(e) = $response_tx.send($action.await) {
+            error!("Failed to send response: {:?}", e);
         }
     };
 }
@@ -103,4 +103,79 @@ pub enum SessionAction {
     ListSessions {
         response_tx: tokio::sync::oneshot::Sender<Result<HashMap<String, PathBuf>>>,
     },
+}
+#[macro_export]
+macro_rules! session_action {
+    (@create, $session_sender:expr, $session_name:expr) => {{
+        let (response_tx, mut response_rx) =
+            tokio::sync::oneshot::channel::<color_eyre::Result<()>>();
+
+        let action = $crate::persistence::persistence_worker::SessionAction::CreateSession {
+            name: $session_name.to_string(),
+            response_tx
+        };
+
+        session_action!(@send_and_receive, $session_sender, action, response_rx)
+    }};
+
+    (@load, $session_sender:expr, $session_name:expr) => {{
+        let (response_tx, mut response_rx) =
+            tokio::sync::oneshot::channel::<color_eyre::Result<()>>();
+
+        let action = $crate::persistence::persistence_worker::SessionAction::LoadSession {
+            name: $session_name.to_string(),
+            response_tx
+        };
+
+        session_action!(@send_and_receive, $session_sender, action, response_rx)
+    }};
+
+    (@save, $session_sender:expr) => {{
+        let (response_tx, mut response_rx) =
+            tokio::sync::oneshot::channel::<color_eyre::Result<()>>();
+
+        let action = $crate::persistence::persistence_worker::SessionAction::SaveCurrentSession { response_tx };
+
+        session_action!(@send_and_receive, $session_sender, action, response_rx)
+    }};
+
+    (@delete, $session_sender:expr, $session_name:expr) => {{
+        let (response_tx, mut response_rx) =
+            tokio::sync::oneshot::channel::<color_eyre::Result<()>>();
+
+        let action = $crate::persistence::persistence_worker::SessionAction::DeleteSession {
+            name: $session_name.to_string(),
+            response_tx
+        };
+
+        session_action!(@send_and_receive, $session_sender, action, response_rx)
+    }};
+
+    (@list, $session_sender:expr) => {{
+        let (response_tx, mut response_rx) =
+            tokio::sync::oneshot::channel::<color_eyre::Result<std::collections::HashMap<String, std::path::PathBuf>>>();
+
+        let action = $crate::persistence::persistence_worker::SessionAction::ListSessions { response_tx };
+
+        session_action!(@send_and_receive, $session_sender, action, response_rx)
+    }};
+
+    // Hilfsmakro für das eigentliche Send/Receive
+    (@send_and_receive, $session_sender:expr, $action:expr, $response_rx:expr) => {{
+        if let Err(e) = $session_sender.try_send($action) {
+            Err(color_eyre::Report::msg(format!("Failed to send action: {}", e)))
+        } else {
+            // Kurz warten, damit der Worker Zeit hat zu antworten
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            match $response_rx.try_recv() {
+                Ok(result) => result,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    Err(color_eyre::Report::msg("Response not ready yet"))
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    Err(color_eyre::Report::msg("Response channel closed"))
+                }
+            }
+        }
+    }};
 }

@@ -208,7 +208,8 @@ impl MQTTConnection<Processing> {
         info!("MQTT connection processing started");
 
         // Timer für regelmäßige Konfigurationsprüfungen aus der Konfiguration entnehmen
-        let poll_interval = Duration::from_millis(1000 / self.config.poll_frequency as u64);
+        let poll_interval =
+            Duration::from_millis(1000 / self.config.poll_frequency.try_into().unwrap_or(10));
         let mut last_check = std::time::Instant::now();
 
         loop {
