@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let portal_cpy = portal.clone();
     let session_sender_cpy = session_sender.clone();
 
-    let mqtt_handl = tokio::spawn(async move {
+    let _mqtt_handl = tokio::spawn(async move {
         let mut mqtt_handle = MQTTHandle { active: true };
 
         mqtt_handle
