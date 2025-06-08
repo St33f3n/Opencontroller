@@ -44,43 +44,6 @@ rumqttc = "0.24.0"         // Pure Rust MQTT client
 crsf = "2.0.1"             // ELRS/Crossfire protocol implementation
 ```
 
-## Architecture
-
-The "diamond" architecture demonstrates how to structure a multi-threaded Rust application:
-
-```mermaid
-graph TD
-    UI[UI Thread<br/>egui immediate-mode] --> CP[ConfigPortal<br/>RwLock + try_lock! macro]
-    
-    subgraph "Input Processing"
-        CC[Controller Collection<br/>gilrs + raw events]
-        CP_T[Controller Processing<br/>statum state machine]
-        CC --> CP_T
-    end
-    
-    subgraph "Mapping Engines"
-        ME1[Keyboard Engine<br/>parallel processing]
-        ME2[ELRS Engine<br/>CRSF packets]
-        ME3[Custom Engine<br/>extensible traits]
-    end
-    
-    subgraph "Protocol Handlers"
-        MQTT[MQTT Handler<br/>rumqttc + state machine]
-        PERSIST[Persistence Worker<br/>session management]
-        AUTO[Auto-save Worker<br/>safety net]
-    end
-    
-    CP_T --> ME1
-    CP_T --> ME2
-    CP_T --> ME3
-    
-    UI --> MQTT
-    UI --> PERSIST
-    CP --> AUTO
-    
-    style CP fill:#f9f,stroke:#333,stroke-width:2px
-    style UI fill:#bbf,stroke:#333,stroke-width:2px
-```
 
 ## Installation & Setup
 
