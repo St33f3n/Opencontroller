@@ -1,3 +1,13 @@
+//! Event processor with state machine for structured controller output
+//!
+//! Transforms raw gamepad events into structured [`ControllerOutput`] using a 3-state machine:
+//! Waiting → Processing → Updating → repeat
+//!
+//! Key features:
+//! - Button release tracking across cycles for held buttons
+//! - Min/max/delta calculation for analog inputs
+//! - 130ms processing intervals optimized for human reaction time
+
 use chrono::{DateTime, Local};
 use statum::{machine, state};
 use std::collections::HashMap;
@@ -5,33 +15,27 @@ use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-// Import shared types from event_collector
-use crate::controller::event_collector::{
+use super::event_collector::{
     ButtonState, ButtonType, JoystickType, RawControllerEvent, TriggerType,
 };
-
-// Button event state
+/// Button state for tracking duration across processing cycles
 #[derive(Clone, Debug, PartialEq)]
 pub enum ButtonEventState {
     Held,     // Button is still being pressed
     Complete, // Button has been released
 }
 
-// Controller state that will be shared through watch channel
+/// Main output structure containing all processed controller state
+///
+/// Supports key combinations through multiple simultaneous button events.
+/// All analog values include current position plus min/max/delta tracking.
 #[derive(Clone, Debug)]
 pub struct ControllerOutput {
-    // Joystick positions
     pub left_stick: JoystickPosition,
     pub right_stick: JoystickPosition,
-
-    // Trigger values
     pub left_trigger: TriggerValue,
     pub right_trigger: TriggerValue,
-
-    // Button events
     pub button_events: Vec<ButtonEvent>,
-
-    // Timestamp of last update
     pub timestamp: SystemTime,
 }
 
@@ -48,19 +52,18 @@ impl Default for ControllerOutput {
     }
 }
 
-// Joystick position with min/max and delta
+/// Joystick position with tracking data for mapping engines
 #[derive(Clone, Debug)]
 pub struct JoystickPosition {
     pub x: f32,
     pub y: f32,
-    pub x_min: f32,
-    pub x_max: f32,
+    pub x_min: f32, // Min value seen this cycle
+    pub x_max: f32, // Max value seen this cycle
     pub y_min: f32,
     pub y_max: f32,
-    pub delta_x: f32,
+    pub delta_x: f32, // Change from last cycle
     pub delta_y: f32,
 }
-
 impl Default for JoystickPosition {
     fn default() -> Self {
         Self {
@@ -76,15 +79,14 @@ impl Default for JoystickPosition {
     }
 }
 
-// Trigger value with min/max and delta
+/// Trigger value with tracking data
 #[derive(Clone, Debug)]
 pub struct TriggerValue {
     pub value: f32,
-    pub min: f32,
-    pub max: f32,
-    pub delta: f32,
+    pub min: f32,   // Min value seen this cycle
+    pub max: f32,   // Max value seen this cycle
+    pub delta: f32, // Change from last cycle
 }
-
 impl Default for TriggerValue {
     fn default() -> Self {
         Self {
@@ -96,12 +98,12 @@ impl Default for TriggerValue {
     }
 }
 
-// Button event with duration info and state
+/// Button event with duration tracking
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonEvent {
     pub button: ButtonType,
-    pub duration_ms: f64,
-    pub state: ButtonEventState,
+    pub duration_ms: f64,        // How long button has been held
+    pub state: ButtonEventState, // Held or Complete
 }
 
 #[derive(Clone, Debug)]
@@ -109,13 +111,12 @@ struct PendingButtonRelease {
     timestamp: DateTime<Local>,
 }
 
-// Event batch for the processing state
 #[derive(Debug, Clone)]
 pub struct EventBatch {
     pub events: Vec<RawControllerEvent>,
 }
 
-// Processor settings
+/// Processor configuration
 #[derive(Clone, Debug)]
 pub struct ProcessorSettings {
     pub processing_interval_ms: u64,
@@ -131,7 +132,6 @@ impl Default for ProcessorSettings {
     }
 }
 
-// Processor errors
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessorError {
     #[error("Failed to initialize processor: {0}")]
@@ -147,62 +147,53 @@ pub enum ProcessorError {
     StateUpdateError(String),
 }
 
-// Define processor states using statum's state macro
+// State machine states for event processing pipeline
 #[state]
 #[derive(Debug, Clone)]
 pub enum ProcessingState {
-    Waiting,
-    Processing(EventBatch),
-    Updating,
+    Waiting,                // Collecting events from queue
+    Processing(EventBatch), // Processing collected events
+    Updating,               // Broadcasting processed output
 }
 
+/// Event processor using statum state machine
+///
+/// Manages button release tracking across cycles to handle held buttons correctly.
+/// Processes events in batches every 130ms for optimal responsiveness.
 #[machine]
 #[derive(Debug)]
 pub struct EventProcessor<S: ProcessingState> {
-    // Receiver for raw events
     event_receiver: mpsc::Receiver<RawControllerEvent>,
-
-    // Processor settings
     settings: ProcessorSettings,
-
-    // Current controller output state
     output: ControllerOutput,
-
-    // mpsc channel sender
     state_sender: mpsc::Sender<ControllerOutput>,
-
-    // Button state tracking with chrono timestamps
+    // Critical: tracks buttons pressed in previous cycles without release events
     pending_button_releases: HashMap<ButtonType, PendingButtonRelease>,
 }
 
-// Implementation of methods available in all states
 impl<S: ProcessingState> EventProcessor<S> {
-    // Helper method to update settings
     pub fn update_settings(&mut self, settings: ProcessorSettings) {
         self.settings = settings;
     }
 
-    // Get a reference to the current settings
     pub fn settings(&self) -> &ProcessorSettings {
         &self.settings
     }
 }
 
-// Implementation for Waiting state
 impl EventProcessor<Waiting> {
+    /// Creates processor in Waiting state
     pub fn create(
         event_receiver: mpsc::Receiver<RawControllerEvent>,
         output_sender: mpsc::Sender<ControllerOutput>,
         settings: Option<ProcessorSettings>,
     ) -> Result<Self, ProcessorError> {
         let settings = settings.unwrap_or_default();
-        info!("Creating Event Processor with settings: {:?}", settings);
 
         // Create initial output state
         let output = ControllerOutput::default();
         debug!("Created initial ControllerOutput state");
 
-        info!("Event Processor created successfully");
         Ok(Self::new(
             event_receiver,
             settings,
@@ -212,27 +203,16 @@ impl EventProcessor<Waiting> {
         ))
     }
 
-    // Wait for interval and then collect events from queue
+    /// Collects all available events from queue and transitions to Processing
     pub async fn wait_and_collect(mut self) -> Result<EventProcessor<Processing>, ProcessorError> {
-        debug!("Collecting events from queue");
-
-        // Collect all available events from the channel
         let mut events = Vec::new();
 
-        // Try to receive multiple events without waiting
+        // Drain all available events
         loop {
-            // Use try_recv to avoid blocking
             match self.event_receiver.try_recv() {
-                Ok(event) => {
-                    debug!("Received event from queue: {:?}", event);
-                    events.push(event);
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    debug!("Event queue empty, processed {} events", events.len());
-                    break; // No more events available
-                }
+                Ok(event) => events.push(event),
+                Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    error!("Event channel disconnected!");
                     return Err(ProcessorError::EventReceiveError(
                         "Event channel disconnected".to_string(),
                     ));
@@ -240,123 +220,38 @@ impl EventProcessor<Waiting> {
             }
         }
 
-        // Create event batch for processing state
-        let event_batch = EventBatch {
-            events: events.clone(),
-        };
-        if !events.is_empty() {
-            info!("Collected batch of {} events for processing", events.len());
-
-            // Log button events at debug level
-            for event in &events {
-                if let RawControllerEvent::ButtonEvent {
-                    button_type,
-                    button_state,
-                    timestamp,
-                } = event
-                {
-                    debug!(
-                        "Queue contained button event: {:?} {:?} at {}",
-                        button_type,
-                        button_state,
-                        timestamp.format("%H:%M:%S.%3f")
-                    );
-                }
-            }
-        } else {
-            debug!("No events to process in this cycle");
-        }
-
-        // Transition to Processing state with event batch
-        debug!("Transitioning to Processing state");
+        let event_batch = EventBatch { events };
         Ok(self.transition_with(event_batch))
     }
 }
-
-// Implementation for Processing state
 impl EventProcessor<Processing> {
-    // Process events and transition to Updating state
+    /// Processes collected events and transitions to Updating state
+    ///
+    /// Handles button release tracking across cycles - buttons without release events
+    /// are tracked as "held" with continuously updated duration.
     pub fn process_events(mut self) -> Result<EventProcessor<Updating>, ProcessorError> {
-        debug!("Processing event batch");
-
-        // Get events from state data
         let raw_events = if let Some(event_batch) = self.get_state_data() {
-            debug!("Found event batch with {} events", event_batch.events.len());
             event_batch.events.clone()
         } else {
-            // No events to process
-            warn!("No event batch found in state data, this should not happen");
             Vec::new()
         };
 
-        // Check if we have pending button releases that need processing
         let has_pending_releases = !self.pending_button_releases.is_empty();
 
         if raw_events.is_empty() && !has_pending_releases {
-            debug!(
-                "No events to process and no pending button releases, clearing button events only"
-            );
-            // No new events to process and no pending releases, just clear events
             self.output.button_events.clear();
         } else {
-            // Process all types of events
-            if raw_events.is_empty() {
-                debug!(
-                    "No new events but have {} pending button releases - processing",
-                    self.pending_button_releases.len()
-                );
-            } else {
-                debug!("Processing {} raw events", raw_events.len());
-                // Process joystick and trigger events only if we have new raw events
+            if !raw_events.is_empty() {
                 self.process_joystick_events(&raw_events)?;
                 self.process_trigger_events(&raw_events)?;
             }
-
-            // Always process button events if we have new events OR pending releases
+            // Always process buttons if we have new events OR pending releases
             self.process_button_events(&raw_events)?;
-
-            // Log button events in result
-            if !self.output.button_events.is_empty() {
-                info!(
-                    "Processed {} button events:",
-                    self.output.button_events.len()
-                );
-                for (i, event) in self.output.button_events.iter().enumerate() {
-                    info!(
-                        "  [{}] Button: {:?}, Duration: {:.2}ms, State: {:?}",
-                        i, event.button, event.duration_ms, event.state
-                    );
-                }
-            }
-
-            // Log pending buttons
-            if has_pending_releases {
-                debug!(
-                    "Pending button releases: {}",
-                    self.pending_button_releases.len()
-                );
-                for (button, release) in &self.pending_button_releases {
-                    let now = Local::now();
-                    let duration = now - release.timestamp;
-                    debug!(
-                        "  Button {:?} pressed for {:.2}ms so far",
-                        button,
-                        duration.num_milliseconds()
-                    );
-                }
-            }
         }
 
-        // Set timestamp
         self.output.timestamp = SystemTime::now();
-        debug!("Updated timestamp: {:?}", self.output.timestamp);
-
-        // Transition to Updating state
-        debug!("Transitioning to Updating state");
         Ok(self.transition())
     }
-
-    // Process joystick events
     fn process_joystick_events(
         &mut self,
         events: &[RawControllerEvent],
@@ -713,7 +608,7 @@ impl EventProcessor<Processing> {
 
 // Implementation for Updating state
 impl EventProcessor<Updating> {
-    // Update the shared state and transition back to Waiting state
+    /// Broadcasts processed output and transitions back to Waiting
     pub fn update_state(self) -> Result<EventProcessor<Waiting>, ProcessorError> {
         debug!("Updating controller state through watch channel");
 
@@ -735,12 +630,6 @@ impl EventProcessor<Updating> {
         match send_result {
             Ok(_) => {
                 debug!("State updated successfully: {}", summary);
-                if !self.output.button_events.is_empty() {
-                    info!(
-                        "Broadcasting {} button events to UI and ELRS",
-                        self.output.button_events.len()
-                    );
-                }
             }
             Err(e) => {
                 error!("Failed to update controller state: {}", e);
@@ -771,10 +660,8 @@ impl ProcessorHandle {
     ) -> Result<Self, ProcessorError> {
         info!("Spawning Event Processor with settings: {:?}", settings);
 
-        // Processor initialisieren
         let processor = EventProcessor::create(event_receiver, output_sender.clone(), settings)?;
 
-        // Tokio-Task starten
         let _task_handle = tokio::spawn(async move {
             if let Err(e) = run_processor_loop(processor).await {
                 error!("Processor task terminated with error: {}", e);
@@ -851,11 +738,11 @@ async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<()
         let now = Local::now();
         if now - last_stats_time > stats_interval {
             let elapsed_seconds = (now - last_stats_time).num_seconds();
-            info!(
+            debug!(
                 "Processor stats: {} cycles, {} events in {} seconds",
                 cycles, total_events, elapsed_seconds
             );
-            info!(
+            debug!(
                 "Average: {:.2} events/cycle, {:.2} cycles/sec, {:.2} events/sec",
                 total_events as f64 / cycles as f64,
                 cycles as f64 / elapsed_seconds as f64,
@@ -873,7 +760,7 @@ async fn run_processor_loop(mut processor: EventProcessor<Waiting>) -> Result<()
             tokio::time::Duration::from_millis(processor.settings().processing_interval_ms);
 
         if new_interval_time != interval_timer.period() {
-            info!(
+            debug!(
                 "Updating interval time to {} ms",
                 processor.settings().processing_interval_ms
             );

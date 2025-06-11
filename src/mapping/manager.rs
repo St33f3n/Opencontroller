@@ -1,5 +1,18 @@
-//! Manager für Mapping-Engines zur Verwaltung verschiedener Mapping-Strategien
-
+//! Mapping engine manager for parallel strategy execution
+//!
+//! Orchestrates multiple mapping engines running simultaneously. Distributes controller
+//! input to all active engines and routes their outputs to appropriate subsystems.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ControllerOutput ──┬─► KeyboardEngine ──► UI Events
+//!                    ├─► ELRSEngine ────────► RC Data  
+//!                    └─► CustomEngine ──────► Protocol Data
+//! ```
+//!
+//! Engines run independently with their own rate limiting and state machines.
+//! Manager handles lifecycle, configuration loading, and output routing.
 use crate::controller::controller_handle::ControllerOutput;
 use crate::mapping::custom::CustomConfig;
 use crate::mapping::elrs::ELRSConfig;
@@ -18,9 +31,14 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 
-/// Manager für Mapping-Engines zur Verwaltung mehrerer paralleler Mapping-Strategien
+/// Manager for parallel mapping engine execution
+///
+/// Handles the lifecycle of multiple mapping engines and routes their outputs.
+/// Each engine runs in its own thread with independent rate limiting.
 pub struct MappingEngineManager {
-    /// Aktive Mapping-Engines, indexiert nach Typ
+    /// Active engines with their communication channels
+    ///
+    /// Tuple contains: (engine handle, output receiver, input sender)
     active_engines: HashMap<
         MappingType,
         (
@@ -30,12 +48,12 @@ pub struct MappingEngineManager {
         ),
     >,
 
-    /// Old Events from last cycle
+    /// Event deduplication for keyboard mapping
+    ///
+    /// Prevents sending identical consecutive keyboard events to UI.
     old_events: Vec<egui::Event>,
-    /// Receiver für Controller-Events
+    /// Input and output channels
     controller_rx: mpsc::Receiver<ControllerOutput>,
-
-    ///Output Channels
     ui_tx: mpsc::Sender<Vec<egui::Event>>,
     elrs_tx: mpsc::Sender<HashMap<u16, u16>>,
     custom_tx: mpsc::Sender<HashMap<String, Vec<u8>>>,
@@ -44,7 +62,7 @@ pub struct MappingEngineManager {
 }
 
 impl MappingEngineManager {
-    /// Erstellt einen neuen Mapping-Engine-Manager
+    /// Creates new manager with output channels for each mapping type
     pub fn new(
         controller_rx: mpsc::Receiver<ControllerOutput>,
         ui_tx: mpsc::Sender<Vec<egui::Event>>,
@@ -52,8 +70,6 @@ impl MappingEngineManager {
         custom_tx: mpsc::Sender<HashMap<String, Vec<u8>>>,
         config_portal: Arc<ConfigPortal>,
     ) -> Self {
-        info!("Creating new MappingEngineManager");
-
         Self {
             active_engines: HashMap::new(),
             old_events: Vec::new(),
@@ -65,11 +81,15 @@ impl MappingEngineManager {
         }
     }
 
-    /// Aktiviert eine Mapping-Strategie mit der angegebenen Konfiguration
+    /// Activates a mapping engine with configuration from ConfigPortal
+    ///
+    /// Loads configuration, validates it, and spawns the engine. If an engine
+    /// of the same type is already active, it will be shut down first.
     pub async fn activate_mapping(
         &mut self,
         mapping_type: MappingType,
     ) -> Result<(), MappingError> {
+        // Load configurations from ConfigPortal
         let keyboard_config: KeyboardConfig = if let ConfigResult::KeyboardConfig(config) = self
             .config_portal
             .execute_potal_action(PortalAction::GetKeyboardConfig)
@@ -96,7 +116,7 @@ impl MappingEngineManager {
             ELRSConfig::default_config()
         };
 
-        // Konfiguration validieren
+        // Validate configurations
         if let Err(e) = elrs_config.validate() {
             error!("Invalid configuration: {}", e);
             return Err(MappingError::ConfigError(format!(
@@ -112,9 +132,9 @@ impl MappingEngineManager {
             )));
         }
 
-        // Prüfen, ob bereits eine Engine dieses Typs aktiv ist
+        // Shutdown existing engine of same type if present
         if let Some(mut engine) = self.active_engines.remove(&mapping_type) {
-            info!("Deactivating existing mapping engine: {}", mapping_type);
+            debug!("Deactivating existing mapping engine: {}", mapping_type);
 
             // Bestehende Engine herunterfahren
             if let Err(e) = engine.0.shutdown().await {
@@ -123,11 +143,11 @@ impl MappingEngineManager {
             }
         }
 
+        // Create and start new engine based on type
         match mapping_type {
             MappingType::Keyboard => {
-                info!("Activating mapping: Keyboard ({})", mapping_type);
+                debug!("Activating mapping: Keyboard ({})", mapping_type);
 
-                // Strategie aus Konfiguration erstellen
                 let strategy = keyboard_config.create_strategy()?;
 
                 let mut mapping_engine_handle =
@@ -146,7 +166,7 @@ impl MappingEngineManager {
                 );
             }
             MappingType::ELRS => {
-                info!("Activating mapping: ELRS ({})", mapping_type);
+                debug!("Activating mapping: ELRS ({})", mapping_type);
 
                 // Strategie aus Konfiguration erstellen
                 let strategy = elrs_config.create_strategy()?;
@@ -166,27 +186,40 @@ impl MappingEngineManager {
                     ),
                 );
             }
-            _ => {}
+            MappingType::Custom => {
+                // TODO: Implement custom mapping activation
+            }
         }
 
         Ok(())
     }
 
+    /// Main processing loop - distributes input and routes output
+    ///
+    /// Runs continuously with 20ms intervals. For each controller input:
+    /// 1. Sends input to all active engines
+    /// 2. Collects outputs from engines  
+    /// 3. Routes outputs to appropriate channels
+    /// 4. Handles event deduplication for keyboard events
     pub async fn run_mapping(&mut self) -> Result<(), Report> {
-        info!("Start Mapping");
+        debug!("Start Mapping");
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
+            // Process controller input if available
             if let Ok(controller_output) = self.controller_rx.try_recv() {
                 for (_mapping_type, (_engine, receiver, sender)) in &mut self.active_engines {
+                    // Send input to engine (non_blocking)
                     let sending_result = sender.try_send(controller_output.clone());
                     if let Err(e) = sending_result {
                         warn!("{}", e);
                     }
+                    //Collect engine output and route to appropriate channel
                     let mapped_events = receiver.try_recv();
                     if let Ok(events) = mapped_events {
                         match events {
                             MappedEvent::KeyboardEvent { key_code } => {
-                                info!("Message to send: {:?}", key_code);
+                                debug!("Message to send: {:?}", key_code);
+                                //Deduplicate consecutive identical keyboard events
                                 if key_code != self.old_events {
                                     self.old_events = key_code.clone();
                                     self.ui_tx.try_send(key_code)?;
@@ -206,32 +239,29 @@ impl MappingEngineManager {
             }
         }
     }
-    /// Deaktiviert eine Mapping-Strategie des angegebenen Typs
+    /// Deactivates a specific mapping engine
     pub async fn deactivate_mapping(
         &mut self,
         mapping_type: MappingType,
     ) -> Result<(), MappingError> {
-        info!("Deactivating mapping of type: {}", mapping_type);
+        debug!("Deactivating mapping of type: {}", mapping_type);
 
-        // Prüfen, ob eine Engine dieses Typs aktiv ist
         if let Some(mut engine) = self.active_engines.remove(&mapping_type) {
-            // Engine herunterfahren
             if let Err(e) = engine.0.shutdown().await {
                 error!("Error shutting down engine: {}", e);
                 return Err(e);
             }
 
-            info!("Mapping engine deactivated: {}", engine.0.name);
+            debug!("Mapping engine deactivated: {}", engine.0.name);
             Ok(())
         } else {
             warn!("No active mapping of type: {}", mapping_type);
             Ok(()) // Kein Fehler, wenn keine Engine dieses Typs aktiv ist
         }
     }
-
-    /// Deaktiviert alle aktiven Mapping-Strategien
+    /// Shuts down all active mapping engines
     pub async fn deactivate_all(&mut self) -> Result<(), MappingError> {
-        info!("Deactivating all mapping engines");
+        debug!("Deactivating all mapping engines");
 
         let engine_types: Vec<MappingType> = self.active_engines.keys().cloned().collect();
 
@@ -242,16 +272,16 @@ impl MappingEngineManager {
             }
         }
 
-        info!("All mapping engines deactivated");
+        debug!("All mapping engines deactivated");
         Ok(())
     }
 
-    /// Prüft, ob eine Mapping-Strategie des angegebenen Typs aktiv ist
+    /// Checks if a mapping engine is currently active
     pub fn is_mapping_active(&self, mapping_type: MappingType) -> bool {
         self.active_engines.contains_key(&mapping_type)
     }
 
-    /// Gibt die Namen aller aktiven Mapping-Strategien zurück
+    /// Returns list of all active mapping engines
     pub fn get_active_mappings(&self) -> Vec<(MappingType, String)> {
         self.active_engines
             .iter()

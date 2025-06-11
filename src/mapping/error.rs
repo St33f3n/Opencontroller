@@ -1,43 +1,48 @@
-//! Fehlerdefinitionen für das Mapping-Modul
+//! Error types for the mapping subsystem
+//!
+//! Defines specific error categories for mapping engine operations, strategy
+//! configuration, and inter-thread communication failures.
 
 use thiserror::Error;
 
-/// Fehlertypen für die Mapping-Engine
+/// Error types for mapping engine operations
+///
+/// Each variant represents a specific failure mode in the mapping pipeline.
+/// Errors are designed to provide clear context for debugging and error handling.
 #[derive(Debug, Error)]
 pub enum MappingError {
-    /// Fehler bei der Konfiguration einer Mapping-Strategie
-    #[error("Konfigurationsfehler: {0}")]
+    /// Configuration validation failed
+    ///
+    /// Occurs when a mapping strategy configuration has invalid parameters,
+    /// missing required fields, or inconsistent settings.
+    #[error("Configuration error: {0}")]
     ConfigError(String),
 
-    /// Fehler bei der Initialisierung einer Mapping-Engine
-    #[error("Initialisierungsfehler: {0}")]
+    /// Strategy initialization failed
+    ///
+    /// Returned when a mapping strategy's `initialize()` method fails,
+    /// typically due to resource allocation or setup problems.
+    #[error("Initialization error: {0}")]
     InitializationError(String),
 
-    /// Fehler bei der Kommunikation über Kanäle
-    #[error("Kanalfehler: {0}")]
+    /// Inter-thread channel communication failed
+    ///
+    /// Occurs when sending or receiving through mpsc channels fails,
+    /// usually due to channel closure or buffer overflow.
+    #[error("Channel error: {0}")]
     ChannelError(String),
 
-    /// Fehler bei der Thread-Verwaltung
-    #[error("Thread-Fehler: {0}")]
+    /// Background task management failed
+    ///
+    /// Returned when tokio tasks panic, fail to spawn, or encounter
+    /// join handle errors during shutdown.
+    #[error("Thread error: {0}")]
     ThreadError(String),
 
-    /// Fehler bei der Verarbeitung von Ereignissen
-    #[error("Verarbeitungsfehler: {0}")]
-    ProcessingError(String),
-
-    /// Fehler bei der Strategie-Anwendung
-    #[error("Strategiefehler: {0}")]
+    /// Strategy execution failed
+    ///
+    /// Occurs when a mapping strategy is in an invalid state or
+    /// encounters runtime errors during event processing.
+    #[error("Strategy error: {0}")]
     StrategyError(String),
-
-    /// Ungültiger Zustandsübergang
-    #[error("Ungültiger Zustandsübergang: {0}")]
-    InvalidStateTransition(String),
-
-    /// Die angeforderte Mapping-Strategie existiert nicht
-    #[error("Unbekannter Mapping-Typ: {0}")]
-    UnknownMappingType(String),
-
-    /// Allgemeiner Fehler
-    #[error("Allgemeiner Fehler: {0}")]
-    General(String),
 }

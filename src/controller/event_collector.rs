@@ -1,3 +1,15 @@
+//! Raw gamepad event collection using gilrs
+//!
+//! Polls gamepad hardware and generates timestamped events for the processor.
+//! Uses gilrs library for cross-platform gamepad support with automatic deadzone application.
+//!
+//! State machine: Initializing → Collecting (continuous loop)
+//!
+//! Key features:
+//! - Auto-selects first available gamepad (TODO: UI control)
+//! - Deadzone filtering for analog inputs
+//! - 100µs polling for low latency
+
 use chrono::{DateTime, Local};
 use gilrs::{Axis, Button, Event, EventType, Gamepad, GamepadId, Gilrs};
 use serde::{Deserialize, Serialize};
@@ -5,7 +17,10 @@ use statum::{machine, state};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-// Raw controller event with precise chrono timestamps
+/// Raw controller events with precise timestamps
+///
+/// All events include chrono timestamps for accurate duration calculations
+/// in the processor. Analog values are already deadzone-filtered.
 #[derive(Debug, Clone)]
 pub enum RawControllerEvent {
     JoystickMove {
@@ -71,6 +86,10 @@ pub enum ButtonType {
 // Collector settings
 #[derive(Clone, Debug)]
 pub struct CollectorSettings {
+    /// Deadzone for analog sticks (0.0-1.0)
+    ///
+    /// Values below this threshold are treated as zero and rescaled.
+    /// Prevents stick drift and accidental inputs.
     pub joystick_deadzone: f32,
 }
 
@@ -98,14 +117,18 @@ pub enum CollectorError {
     NoGamepadError(String),
 }
 
-// Define collector states using statum's state macro
+/// Collection states for the state machine
 #[state]
 #[derive(Debug, Clone)]
 pub enum CollectionState {
-    Initializing,
-    Collecting,
+    Initializing, // Setting up gilrs and finding gamepads
+    Collecting,   // Active event polling loop
 }
 
+/// Event collector using gilrs and statum state machine
+///
+/// Maintains analog stick state for delta calculations and applies deadzone filtering.
+/// Automatically selects the first available gamepad (second if multiple available).
 #[machine]
 #[derive(Debug)]
 pub struct EventCollector<S: CollectionState> {
@@ -143,6 +166,7 @@ impl<S: CollectionState> EventCollector<S> {
 
 // Implementation for Initializing state
 impl EventCollector<Initializing> {
+    /// Creates collector and initializes gilrs
     pub fn create(
         settings: Option<CollectorSettings>,
         event_sender: mpsc::Sender<RawControllerEvent>,
@@ -176,7 +200,7 @@ impl EventCollector<Initializing> {
         ))
     }
 
-    // Initialize the controller and transition to Collecting state
+    /// Finds and selects an active gamepad, transitions to Collecting    // Initialize the controller and transition to Collecting state
     pub fn initialize(mut self) -> Result<EventCollector<Collecting>, CollectorError> {
         info!(
             "Initializing Event Collector with deadzone: {}",
@@ -199,8 +223,8 @@ impl EventCollector<Initializing> {
                     gamepad.uuid()
                 );
             }
-            //TODO Dynamic change for active gamepad from UI
-            // Try to use the first gamepad, or the second if available
+            // Auto-selection logic: prefer second gamepad if available
+            // TODO: Make this controllable from UI
             let index = if gamepads.len() > 1 { 1 } else { 0 };
             let (id, gamepad) = &gamepads[index];
             self.active_gamepad = Some(*id);
@@ -216,7 +240,7 @@ impl EventCollector<Initializing> {
 
 // Implementation for Controller in Collecting state
 impl EventCollector<Collecting> {
-    // Collect a single event and send it to the queue
+    /// Polls for a single event and sends it to the processor
     pub fn collect_next_event(&mut self) -> Result<(), CollectorError> {
         // Check for next event
         if let Some(Event {
@@ -269,7 +293,7 @@ impl EventCollector<Collecting> {
         Ok(())
     }
 
-    // Run the collector in a loop
+    /// Main collection loop - runs continuously until error
     pub fn run_collection_loop(&mut self) -> Result<(), CollectorError> {
         info!("Starting Event Collector loop");
 
@@ -307,7 +331,10 @@ impl EventCollector<Collecting> {
         }
     }
 
-    // Convert gilrs event to internal event type with chrono timestamp
+    /// Converts gilrs events to internal format with deadzone filtering
+    ///
+    /// Critical function that maps all supported gilrs events to internal types.
+    /// Applies deadzone to analog inputs and tracks stick positions for deltas.
     fn convert_gilrs_event(&mut self, event: EventType) -> Option<RawControllerEvent> {
         let now = Local::now(); // Use chrono for precise timestamp
 
@@ -462,12 +489,12 @@ impl EventCollector<Collecting> {
                 None
             }
             EventType::Connected => {
-                info!("Controller connected event detected");
-                None // This should trigger re-initialization in a production system
+                info!("Controller connected");
+                None // TODO: Trigger re-initialization
             }
             EventType::Disconnected => {
-                warn!("Controller disconnected event detected");
-                None // This should trigger safe shutdown in a production system
+                warn!("Controller disconnected");
+                None // TODO: Handle gracefully
             }
             _ => {
                 debug!("Unhandled event type: {:?}", event);
@@ -476,14 +503,13 @@ impl EventCollector<Collecting> {
         }
     }
 }
-
-// Public interface for spawning and running the collector
+/// Handle for spawning the collector in a tokio task
 pub struct CollectorHandle {
     event_sender: mpsc::Sender<RawControllerEvent>,
 }
 
 impl CollectorHandle {
-    // Create a new collector and spawn it as a tokio task
+    /// Spawns collector in a tokio task with continuous polling loop
     pub fn spawn(
         settings: Option<CollectorSettings>,
         event_sender: mpsc::Sender<RawControllerEvent>,
@@ -530,7 +556,9 @@ impl CollectorHandle {
     }
 }
 
-// Helper function to map gilrs Button to our ButtonType
+/// Maps gilrs buttons to internal button types
+///
+/// Uses Xbox controller layout as standard (South=A, East=B, etc.)
 fn map_button(button: Button) -> Option<ButtonType> {
     match button {
         Button::South => Some(ButtonType::A),
@@ -552,7 +580,10 @@ fn map_button(button: Button) -> Option<ButtonType> {
     }
 }
 
-// Helper function to apply deadzone to analog stick values
+/// Applies deadzone filtering with rescaling
+///
+/// Values below deadzone become 0.0, values above are rescaled to maintain
+/// full range. This prevents stick drift while preserving sensitivity.
 fn apply_deadzone(value: f32, deadzone: f32) -> f32 {
     if value.abs() < deadzone {
         0.0
